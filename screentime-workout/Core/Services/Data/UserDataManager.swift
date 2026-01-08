@@ -20,6 +20,7 @@ final class UserDataManager {
     static let shared = UserDataManager()
     
     private let db = Firestore.firestore()
+    private let listenerQueue = DispatchQueue(label: "com.screentime-workout.firestore-listeners", qos: .utility)
     private var listenerRegistrations: [ListenerRegistration] = []
     private var lastTimeLimitsLogCount: Int?
     private var lastWorkoutsLogCount: Int?
@@ -176,6 +177,26 @@ final class UserDataManager {
         var lastUpdated: Date = Date()
     }
     
+    // MARK: - Pause/Resume for Performance
+    
+    /// Call this when entering onboarding or other performance-critical flows
+    /// Firestore listeners fire on main thread and can cause UI stalls during network issues
+    private var pausedUserId: String?
+    
+    func pauseListeners() {
+        guard !listenerRegistrations.isEmpty else { return }
+        pausedUserId = currentUserId
+        print("[UserData] ⏸️ Pausing Firestore listeners for performance")
+        stopListening()
+    }
+    
+    func resumeListeners() {
+        guard let userId = pausedUserId ?? currentUserId else { return }
+        pausedUserId = nil
+        print("[UserData] ▶️ Resuming Firestore listeners")
+        startListening(userId: userId)
+    }
+    
     // MARK: - Start/Stop Listening
     
     private func startListening(userId: String) {
@@ -183,7 +204,9 @@ final class UserDataManager {
         
         // Listen to workout sessions
         let workoutsRef = db.collection("users").document(userId).collection("workouts")
-        let workoutsListener = workoutsRef.order(by: "completedAt", descending: true).addSnapshotListener { [weak self] snapshot, error in
+        let workoutsListener = workoutsRef
+            .order(by: "completedAt", descending: true)
+            .addSnapshotListener { [weak self] snapshot, error in
             if let error = error {
                 print("[UserData] Workouts listener error: \(error.localizedDescription)")
                 return
@@ -191,15 +214,22 @@ final class UserDataManager {
             
             guard let documents = snapshot?.documents else { return }
             
-            self?.workoutSessions = documents.compactMap { doc in
-                try? doc.data(as: WorkoutSessionData.self)
-            }
-            
-            // Only log if count changed (avoid spam from sync operations)
-            let newCount = self?.workoutSessions.count ?? 0
-            if self?.lastWorkoutsLogCount != newCount {
-                self?.lastWorkoutsLogCount = newCount
-                print("[UserData] Loaded \(newCount) workouts from Firebase")
+                self?.listenerQueue.async {
+                    let sessions = documents.compactMap { doc in
+                        try? doc.data(as: WorkoutSessionData.self)
+                    }
+                    
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.workoutSessions = sessions
+                        
+                        // Only log if count changed (avoid spam from sync operations)
+                        let newCount = sessions.count
+                        if self.lastWorkoutsLogCount != newCount {
+                            self.lastWorkoutsLogCount = newCount
+                            print("[UserData] Loaded \(newCount) workouts from Firebase")
+                        }
+                    }
             }
         }
         listenerRegistrations.append(workoutsListener)
@@ -214,14 +244,21 @@ final class UserDataManager {
             
             guard let documents = snapshot?.documents else { return }
             
-            self?.timeLimits = documents.compactMap { doc in
-                try? doc.data(as: TimeLimitData.self)
-            }
-            
-            let newCount = self?.timeLimits.count ?? 0
-            if self?.lastTimeLimitsLogCount != newCount {
-                self?.lastTimeLimitsLogCount = newCount
-                print("[UserData] Loaded \(newCount) time limits from Firebase")
+            self?.listenerQueue.async {
+                let limits = documents.compactMap { doc in
+                    try? doc.data(as: TimeLimitData.self)
+                }
+                
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.timeLimits = limits
+                    
+                    let newCount = limits.count
+                    if self.lastTimeLimitsLogCount != newCount {
+                        self.lastTimeLimitsLogCount = newCount
+                        print("[UserData] Loaded \(newCount) time limits from Firebase")
+                    }
+                }
             }
         }
         listenerRegistrations.append(limitsListener)
@@ -235,25 +272,32 @@ final class UserDataManager {
             }
             
             if let data = snapshot?.data() {
-                self?.userSettings = UserSettingsData(
-                    userName: data["userName"] as? String ?? "",
-                    selectedGoals: data["selectedGoals"] as? [String] ?? [],
-                    currentUsageHours: data["currentUsageHours"] as? Double ?? 4,
-                    targetUsageHours: data["targetUsageHours"] as? Double ?? 2,
-                    selectedExercise: data["selectedExercise"] as? String ?? "",
-                    exerciseFrequency: data["exerciseFrequency"] as? String ?? "",
-                    notificationsEnabled: data["notificationsEnabled"] as? Bool ?? true,
-                    selectedAge: data["selectedAge"] as? String ?? "",
-                    hasCompletedOnboarding: data["hasCompletedOnboarding"] as? Bool ?? false,
-                    onboardingStep: data["onboardingStep"] as? Int ?? 0,
-                    lastUpdated: (data["lastUpdated"] as? Timestamp)?.dateValue() ?? Date()
-                )
-                
-                // Throttle logging
-                let now = Date()
-                if self?.lastSettingsLogTime == nil || now.timeIntervalSince(self?.lastSettingsLogTime ?? .distantPast) > (self?.logThrottleInterval ?? 2.0) {
-                    self?.lastSettingsLogTime = now
-                    print("[UserData] Loaded user settings from Firebase")
+                self?.listenerQueue.async {
+                    let settings = UserSettingsData(
+                        userName: data["userName"] as? String ?? "",
+                        selectedGoals: data["selectedGoals"] as? [String] ?? [],
+                        currentUsageHours: data["currentUsageHours"] as? Double ?? 4,
+                        targetUsageHours: data["targetUsageHours"] as? Double ?? 2,
+                        selectedExercise: data["selectedExercise"] as? String ?? "",
+                        exerciseFrequency: data["exerciseFrequency"] as? String ?? "",
+                        notificationsEnabled: data["notificationsEnabled"] as? Bool ?? true,
+                        selectedAge: data["selectedAge"] as? String ?? "",
+                        hasCompletedOnboarding: data["hasCompletedOnboarding"] as? Bool ?? false,
+                        onboardingStep: data["onboardingStep"] as? Int ?? 0,
+                        lastUpdated: (data["lastUpdated"] as? Timestamp)?.dateValue() ?? Date()
+                    )
+                    
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.userSettings = settings
+                        
+                        // Throttle logging
+                        let now = Date()
+                        if self.lastSettingsLogTime == nil || now.timeIntervalSince(self.lastSettingsLogTime ?? .distantPast) > self.logThrottleInterval {
+                            self.lastSettingsLogTime = now
+                            print("[UserData] Loaded user settings from Firebase")
+                        }
+                    }
                 }
             }
         }
@@ -268,22 +312,29 @@ final class UserDataManager {
             }
             
             if let data = snapshot?.data() {
-                self?.screenTimeBalance = ScreenTimeBalanceData(
-                    availableMinutes: data["availableMinutes"] as? Int ?? 0,
-                    totalEarnedAllTime: data["totalEarnedAllTime"] as? Int ?? 0,
-                    totalWorkoutsCompleted: data["totalWorkoutsCompleted"] as? Int ?? 0,
-                    currentStreak: data["currentStreak"] as? Int ?? 0,
-                    isUnlocked: data["isUnlocked"] as? Bool ?? false,
-                    unlockedUntil: (data["unlockedUntil"] as? Timestamp)?.dateValue(),
-                    lastWorkoutDate: (data["lastWorkoutDate"] as? Timestamp)?.dateValue(),
-                    lastUpdated: (data["lastUpdated"] as? Timestamp)?.dateValue() ?? Date()
-                )
-                
-                // Throttle logging  
-                let now = Date()
-                if self?.lastBalanceLogTime == nil || now.timeIntervalSince(self?.lastBalanceLogTime ?? .distantPast) > (self?.logThrottleInterval ?? 2.0) {
-                    self?.lastBalanceLogTime = now
-                    print("[UserData] Loaded screen time balance from Firebase")
+                self?.listenerQueue.async {
+                    let balance = ScreenTimeBalanceData(
+                        availableMinutes: data["availableMinutes"] as? Int ?? 0,
+                        totalEarnedAllTime: data["totalEarnedAllTime"] as? Int ?? 0,
+                        totalWorkoutsCompleted: data["totalWorkoutsCompleted"] as? Int ?? 0,
+                        currentStreak: data["currentStreak"] as? Int ?? 0,
+                        isUnlocked: data["isUnlocked"] as? Bool ?? false,
+                        unlockedUntil: (data["unlockedUntil"] as? Timestamp)?.dateValue(),
+                        lastWorkoutDate: (data["lastWorkoutDate"] as? Timestamp)?.dateValue(),
+                        lastUpdated: (data["lastUpdated"] as? Timestamp)?.dateValue() ?? Date()
+                    )
+                    
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+                        self.screenTimeBalance = balance
+                        
+                        // Throttle logging
+                        let now = Date()
+                        if self.lastBalanceLogTime == nil || now.timeIntervalSince(self.lastBalanceLogTime ?? .distantPast) > self.logThrottleInterval {
+                            self.lastBalanceLogTime = now
+                            print("[UserData] Loaded screen time balance from Firebase")
+                        }
+                    }
                 }
             }
         }

@@ -55,10 +55,12 @@ struct ContentView: View {
                     )
                     .id("main-\(authManager.user?.uid ?? "none")") // Force recreate on user change
                 } else {
+                    let _ = print("[ContentView] 🎯 Showing OnboardingFlowView - \(Date())")
                     OnboardingFlowView(isPreview: false) {
                         // Mark onboarding complete and sync to Firebase
                         onboardingDataManager.markOnboardingComplete()
                         hasCompletedOnboarding = true
+                        AnalyticsManager.shared.startIfNeeded()
                         
                         // Sync all local data to Firebase
                         Task {
@@ -74,6 +76,14 @@ struct ContentView: View {
         .onAppear {
             let elapsed = Date().timeIntervalSince(AppLaunchMetrics.start)
             print(String(format: "[UI] ContentView appeared at %.2fs after launch", elapsed))
+            if hasCompletedOnboarding {
+                AnalyticsManager.shared.startIfNeeded()
+            }
+        }
+        .onChange(of: hasCompletedOnboarding) { _, newValue in
+            if newValue {
+                AnalyticsManager.shared.startIfNeeded()
+            }
         }
         // Show UI immediately; overlay a lightweight restore indicator without blocking
         .overlay {
@@ -2314,6 +2324,11 @@ struct OnboardingFlowView: View {
     @State private var highestStepReached: OnboardingStep = .hook
     @GestureState private var dragOffset: CGFloat = 0
     
+    // Debounce: track last step change to prevent rapid-fire navigation
+    @State private var lastStepChangeTime: Date = .distantPast
+    // Track when step changed for render timing measurement
+    @State private var stepChangeTimestamp: Date = .distantPast
+    
     var body: some View {
         ZStack {
             Color.black
@@ -2378,12 +2393,31 @@ struct OnboardingFlowView: View {
             }
         }
         .onAppear {
+            let appearStart = Date()
             if !hasLoadedSavedState {
                 loadSavedState()
             }
-            // Pre-warm Superwall immediately when onboarding starts
-            // WKWebView takes 10-20+ seconds to initialize its networking process
-            SuperwallManager.shared.preWarm()
+            let loadElapsed = Date().timeIntervalSince(appearStart)
+            if loadElapsed > 0.05 {
+                print(String(format: "[Onboarding] loadSavedState took %.3fs", loadElapsed))
+            }
+            
+            // NOTE: Superwall pre-warming removed from onboarding start
+            // WKWebView processes take 10+ seconds to launch and block main thread
+            // Pre-warm will happen when user reaches paywall step or visits settings
+            print("[Onboarding] OnboardingFlowView appeared (Superwall preWarm skipped for performance)")
+            
+            // Pause Firebase listeners during onboarding - they fire on main thread
+            // and can cause multi-second stalls during network reconnection events
+            UserDataManager.shared.pauseListeners()
+            
+            MainThreadStallMonitor.shared.start(label: "Onboarding")
+        }
+        .onDisappear {
+            MainThreadStallMonitor.shared.stop()
+            
+            // Resume Firebase listeners when leaving onboarding
+            UserDataManager.shared.resumeListeners()
         }
         .onChange(of: userName) { _, _ in if hasLoadedSavedState { saveOnboardingState() } }
         .onChange(of: selectedGoals) { _, _ in if hasLoadedSavedState { saveOnboardingState() } }
@@ -2405,14 +2439,34 @@ struct OnboardingFlowView: View {
             OnboardingHookView(onContinue: { nextStep() })
         case .nameInput:
             OnboardingNameView(userName: $userName, onContinue: { nextStep() })
+                .onAppear {
+                    let renderDelay = Date().timeIntervalSince(stepChangeTimestamp)
+                    print(String(format: "[Onboarding] ✅ OnboardingNameView APPEARED - %.3fs after step change", renderDelay))
+                }
         case .goalSelection:
             OnboardingGoalsView(selectedGoals: $selectedGoals, userName: userName, onContinue: { nextStep() })
+                .onAppear {
+                    let delay = Date().timeIntervalSince(stepChangeTimestamp)
+                    print(String(format: "[Onboarding] ✅ GoalsView APPEARED - %.3fs after step change", delay))
+                }
         case .currentUsage:
             OnboardingCurrentUsageView(hours: $currentUsageHours, onContinue: { nextStep() })
+                .onAppear {
+                    let delay = Date().timeIntervalSince(stepChangeTimestamp)
+                    print(String(format: "[Onboarding] ✅ CurrentUsageView APPEARED - %.3fs after step change", delay))
+                }
         case .targetUsage:
             OnboardingTargetUsageView(currentHours: currentUsageHours, targetHours: $targetUsageHours, userName: userName, onContinue: { nextStep() })
+                .onAppear {
+                    let delay = Date().timeIntervalSince(stepChangeTimestamp)
+                    print(String(format: "[Onboarding] ✅ TargetUsageView APPEARED - %.3fs after step change", delay))
+                }
         case .problemApps:
             OnboardingProblemAppsView(selectedApps: $selectedApps, onContinue: { nextStep() })
+                .onAppear {
+                    let delay = Date().timeIntervalSince(stepChangeTimestamp)
+                    print(String(format: "[Onboarding] ✅ ProblemAppsView APPEARED - %.3fs after step change", delay))
+                }
         case .whyHardToQuit:
             OnboardingWhyHardView(selectedReasons: $selectedReasons, selectedApps: selectedApps, onContinue: { nextStep() })
         case .emotionalImpact:
@@ -2513,18 +2567,51 @@ struct OnboardingFlowView: View {
     }
     
     private func nextStep() {
+        let now = Date()
+        
+        // Debounce: prevent rapid-fire step changes (e.g., from queued gestures during UI freeze)
+        let timeSinceLastChange = now.timeIntervalSince(lastStepChangeTime)
+        guard timeSinceLastChange > 0.3 else {
+            print("[Onboarding] ⚠️ nextStep() DEBOUNCED - only \(String(format: "%.3fs", timeSinceLastChange)) since last change")
+            return
+        }
+        
+        print("[Onboarding] >>> nextStep() ENTER - \(Date())")
+        let stepStart = Date()
+        
+        print("[Onboarding]   1. Resigning first responder...")
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        print(String(format: "[Onboarding]   1. Done (%.3fs)", Date().timeIntervalSince(stepStart)))
+        
         let allSteps = OnboardingStep.allCases
         if let currentIndex = allSteps.firstIndex(of: currentStep),
            currentIndex < allSteps.count - 1 {
+            let oldStep = currentStep
+            
+            // Mark the change time BEFORE updating state
+            lastStepChangeTime = now
+            stepChangeTimestamp = now
+            
+            print("[Onboarding]   2. Updating step state... (timestamp set for render tracking)")
+            let animStart = Date()
             withAnimation(.easeInOut(duration: 0.3)) {
                 currentStep = allSteps[currentIndex + 1]
                 if currentStep.rawValue > highestStepReached.rawValue {
                     highestStepReached = currentStep
                 }
             }
+            print(String(format: "[Onboarding]   2. Step updated (%.3fs)", Date().timeIntervalSince(animStart)))
+            
             // Save progress
+            print("[Onboarding]   3. Saving state...")
+            let saveStart = Date()
             saveOnboardingState()
+            print(String(format: "[Onboarding]   3. State saved (%.3fs)", Date().timeIntervalSince(saveStart)))
+            
+            let elapsed = Date().timeIntervalSince(stepStart)
+            print(String(format: "[Onboarding] <<< nextStep() EXIT - total %.3fs (%@ → %@)", elapsed, String(describing: oldStep), String(describing: currentStep)))
+        } else {
+            print("[Onboarding] <<< nextStep() EXIT - no step change")
         }
     }
     
@@ -2580,6 +2667,7 @@ struct OnboardingFlowView: View {
     private func saveOnboardingState() {
         guard !isPreview else { return }
         
+        // Save all values to UserDefaults (fast, local-only)
         dataManager.saveCurrentStep(currentStep.rawValue)
         dataManager.saveUserName(userName)
         dataManager.saveSelectedGoals(selectedGoals)
@@ -2595,6 +2683,9 @@ struct OnboardingFlowView: View {
         dataManager.saveNotificationsDenied(notificationsDenied)
         dataManager.saveOnboardingRepsCompleted(onboardingRepsCompleted)
         
+        // Schedule a single debounced Firebase sync (instead of 14 separate syncs)
+        dataManager.scheduleDebouncedSync()
+        
         print("[Onboarding] Saved state - step: \(currentStep)")
     }
 }
@@ -2607,6 +2698,10 @@ struct OnboardingContinueButton: View {
     let isEnabled: Bool
     let action: () -> Void
     
+    // Debounce state to prevent rapid-fire taps during UI freezes
+    @State private var isProcessing = false
+    @State private var lastTapTime: Date = .distantPast
+    
     init(_ title: String = "Continue", isEnabled: Bool = true, action: @escaping () -> Void) {
         self.title = title
         self.isEnabled = isEnabled
@@ -2614,16 +2709,43 @@ struct OnboardingContinueButton: View {
     }
     
     var body: some View {
-        Button(action: action) {
+        Button {
+            // Debounce: ignore taps within 500ms of each other
+            let now = Date()
+            guard now.timeIntervalSince(lastTapTime) > 0.5 else {
+                print("[Onboarding] ⚠️ DEBOUNCED tap on '\(title)' (too fast)")
+                return
+            }
+            
+            // Prevent re-entry while processing
+            guard !isProcessing else {
+                print("[Onboarding] ⚠️ BLOCKED tap on '\(title)' (still processing)")
+                return
+            }
+            
+            lastTapTime = now
+            isProcessing = true
+            
+            print("[Onboarding] 📱 BUTTON TAP DETECTED: '\(title)' at \(Date())")
+            let tapStart = Date()
+            action()
+            let elapsed = Date().timeIntervalSince(tapStart)
+            print(String(format: "[Onboarding] 📱 BUTTON ACTION COMPLETE: '\(title)' took %.3fs", elapsed))
+            
+            // Reset after a short delay to allow next tap
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                isProcessing = false
+            }
+        } label: {
             Text(title)
                 .font(.system(size: 18, weight: .bold))
                 .foregroundStyle(.black)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 18)
-                .background(isEnabled ? .white : Color.white.opacity(0.3))
+                .background(isEnabled && !isProcessing ? .white : Color.white.opacity(0.3))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
-        .disabled(!isEnabled)
+        .disabled(!isEnabled || isProcessing)
         .padding(.horizontal, 24)
         .padding(.bottom, 40)
     }
@@ -2825,12 +2947,20 @@ struct OnboardingHookView: View {
                 Spacer()
                 
                 // CTA
-                OnboardingContinueButton("Let's Go", action: onContinue)
+                OnboardingContinueButton("Let's Go", action: {
+                    print("[Onboarding] 🚀 LET'S GO BUTTON PRESSED - \(Date())")
+                    let buttonStart = Date()
+                    onContinue()
+                    let elapsed = Date().timeIntervalSince(buttonStart)
+                    print(String(format: "[Onboarding] ✅ LET'S GO onContinue() completed in %.3fs", elapsed))
+                })
                     .opacity(showContent ? 1 : 0)
                     .padding(.bottom, 20)
             }
         }
         .onAppear {
+            print("[Onboarding] 🎬 OnboardingHookView appeared - \(Date())")
+            
             // Entrance animations
             withAnimation(.spring(response: 0.8, dampingFraction: 0.7).delay(0.2)) {
                 showVisuals = true
@@ -2920,8 +3050,9 @@ struct OnboardingNameView: View {
         }
         .onAppear {
             localName = userName
-            // Focus after layout settles to avoid first-tap lag
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            // Delay keyboard focus significantly to avoid contributing to stalls
+            // User can tap to focus if they want it sooner
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 isTextFieldFocused = true
             }
         }

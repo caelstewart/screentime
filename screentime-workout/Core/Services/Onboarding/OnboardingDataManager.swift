@@ -76,81 +76,76 @@ final class OnboardingDataManager {
     
     private init() {}
     
-    // MARK: - Save Individual Values
+    // MARK: - Save Individual Values (Local Only - No Sync)
+    // These save to UserDefaults immediately but DON'T trigger Firebase sync
+    // Use scheduleDebouncedSync() after a batch of saves for efficient syncing
     
     func saveCurrentStep(_ step: Int) {
         defaults.set(step, forKey: Keys.onboardingStep)
-        syncToFirebaseIfNeeded()
     }
     
     func saveUserName(_ name: String) {
         defaults.set(name, forKey: Keys.userName)
-        syncToFirebaseIfNeeded()
     }
     
     func saveSelectedGoals(_ goals: Set<String>) {
         defaults.set(Array(goals), forKey: Keys.selectedGoals)
-        syncToFirebaseIfNeeded()
     }
     
     func saveCurrentUsageHours(_ hours: Double) {
         defaults.set(hours, forKey: Keys.currentUsageHours)
-        syncToFirebaseIfNeeded()
     }
     
     func saveTargetUsageHours(_ hours: Double) {
         defaults.set(hours, forKey: Keys.targetUsageHours)
-        syncToFirebaseIfNeeded()
     }
     
     func saveSelectedApps(_ apps: Set<String>) {
         defaults.set(Array(apps), forKey: Keys.selectedApps)
-        syncToFirebaseIfNeeded()
     }
     
     func saveSelectedReasons(_ reasons: Set<String>) {
         defaults.set(Array(reasons), forKey: Keys.selectedReasons)
-        syncToFirebaseIfNeeded()
     }
     
     func saveSelectedFeelings(_ feelings: Set<String>) {
         defaults.set(Array(feelings), forKey: Keys.selectedFeelings)
-        syncToFirebaseIfNeeded()
     }
     
     func saveSelectedAge(_ age: String) {
         defaults.set(age, forKey: Keys.selectedAge)
-        syncToFirebaseIfNeeded()
     }
     
     func saveSelectedPreviousSolutions(_ solutions: Set<String>) {
         defaults.set(Array(solutions), forKey: Keys.selectedPreviousSolutions)
-        syncToFirebaseIfNeeded()
     }
     
     func saveSelectedExercise(_ exercise: String) {
         defaults.set(exercise, forKey: Keys.selectedExercise)
-        syncToFirebaseIfNeeded()
     }
     
     func saveExerciseFrequency(_ frequency: String) {
         defaults.set(frequency, forKey: Keys.exerciseFrequency)
-        syncToFirebaseIfNeeded()
     }
     
     func saveNotificationsDenied(_ denied: Bool) {
         defaults.set(denied, forKey: Keys.notificationsDenied)
-        syncToFirebaseIfNeeded()
     }
     
     func saveOnboardingRepsCompleted(_ reps: Int) {
         defaults.set(reps, forKey: Keys.onboardingRepsCompleted)
-        syncToFirebaseIfNeeded()
     }
     
     func markOnboardingComplete() {
         defaults.set(true, forKey: Keys.hasCompletedOnboarding)
-        syncToFirebaseIfNeeded()
+        // Force immediate sync when onboarding completes (important milestone)
+        syncToFirebaseIfNeeded(force: true)
+    }
+    
+    /// Call this after a batch of saves to schedule a debounced Firebase sync
+    /// Much more efficient than syncing after every individual save
+    func scheduleDebouncedSync() {
+        syncToFirebaseIfNeeded(force: false)
     }
     
     // MARK: - Load Values
@@ -265,23 +260,25 @@ final class OnboardingDataManager {
     
     // MARK: - Firebase Sync
     
-    private func syncToFirebaseIfNeeded() {
+    private func syncToFirebaseIfNeeded(force: Bool = false) {
         guard let userId = Auth.auth().currentUser?.uid else {
-            print("[OnboardingData] No authenticated user, skipping Firebase sync")
+            // No user = no sync needed, this is fine
             return
         }
         
-        // Debounce sync - only sync every 2 seconds max
+        // Debounce sync - only sync every 3 seconds max (unless forced)
         let lastSync = defaults.double(forKey: Keys.lastSyncTimestamp)
         let now = Date().timeIntervalSince1970
-        guard now - lastSync > 2.0 else { return }
+        guard force || (now - lastSync > 3.0) else { return }
         
         defaults.set(now, forKey: Keys.lastSyncTimestamp)
         
-        // Use detached task to avoid blocking main thread during network issues
-        // Firebase sync should happen in background without affecting UI responsiveness
-        Task.detached(priority: .utility) { [self] in
-            await syncToFirebase(userId: userId)
+        // Use DispatchQueue for true background execution
+        // Task.detached still has some coordination overhead
+        DispatchQueue.global(qos: .utility).async { [self] in
+            Task {
+                await syncToFirebase(userId: userId)
+            }
         }
     }
     

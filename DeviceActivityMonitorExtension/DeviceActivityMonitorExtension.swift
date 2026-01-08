@@ -48,9 +48,14 @@ public class DeviceActivityMonitorExtension: DeviceActivityMonitor {
         super.intervalDidStart(for: activity)
         os_log("🌅 intervalDidStart: %{public}@", log: osLog, type: .default, activity.rawValue)
         log("🌅 intervalDidStart \(activity.rawValue)")
-        // Clear shields when interval starts (beginning of day)
-        store.shield.applications = nil
-        store.shield.applicationCategories = nil
+        
+        // Only clear shields when a NEW DAY starts (dailyUsage interval)
+        // Don't clear for debug activities or bonus activities - those should preserve existing shields
+        if activity.rawValue == "dailyUsage" {
+            log("🔄 New daily interval - clearing shields for fresh start")
+            store.shield.applications = nil
+            store.shield.applicationCategories = nil
+        }
     }
     
     public override func intervalDidEnd(for activity: DeviceActivityName) {

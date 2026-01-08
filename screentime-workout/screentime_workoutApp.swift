@@ -10,9 +10,9 @@ import SwiftData
 import FirebaseCore
 import FirebaseFirestore
 import FirebaseInAppMessaging
+import FirebaseCrashlytics
 import GoogleSignIn
 import SuperwallKit
-import PostHog
 
 // Simple launch timer for startup diagnostics
 enum AppLaunchMetrics {
@@ -35,34 +35,58 @@ final class SuperwallManager {
     private init() {}
     
     /// Configure Superwall lazily (only when first paywall is triggered)
+    /// IMPORTANT: Must be called from main thread but we use async to not block
     private func configureIfNeeded() {
         guard Self.isEnabled, !isConfigured else { return }
         isConfigured = true
+        
+        // Superwall.configure() can trigger WKWebView initialization which is SLOW
+        // We wrap it but can't make it fully async - Superwall requires main thread
+        let start = Date()
         Superwall.configure(apiKey: apiKey)
-        print("[Superwall] Configured (lazy init)")
+        let elapsed = Date().timeIntervalSince(start)
+        print(String(format: "[Superwall] Configured (lazy init) in %.2fs", elapsed))
     }
     
     /// Pre-warm Superwall and WKWebView in the background
-    /// Call this at onboarding start to ensure paywall loads instantly
+    /// Call this ONLY from settings tab or when paywall is actually needed
+    /// DO NOT call during onboarding - it will freeze the UI
+    /// This is FIRE AND FORGET - caller should NOT await this
     func preWarm() {
         guard Self.isEnabled, !isPreWarmed else { return }
         isPreWarmed = true
-        print("[Superwall] Pre-warming started...")
+        print("[Superwall] Pre-warming started (background)...")
         
-        // Run configuration and preload off the main queue to avoid any UI hitching
-        Task.detached(priority: .utility) {
-            // Configure on main actor (Superwall expects main), but the detached task
-            // keeps the caller from being blocked while WKWebView spins up.
-            await MainActor.run {
+        // Use DispatchQueue instead of Task to ensure true background execution
+        // WKWebView initialization can block main thread for 10+ seconds
+        // We delay significantly to ensure UI is fully responsive first
+        DispatchQueue.global(qos: .background).async { [self] in
+            // LONG delay - let the entire onboarding flow be responsive first
+            // WKWebView will block main thread when it finally loads
+            Thread.sleep(forTimeInterval: 5.0)
+            
+            print("[Superwall] Starting main thread config after 5s delay...")
+            
+            // Configure on main thread (Superwall requires it)
+            DispatchQueue.main.async {
+                let start = Date()
                 self.configureIfNeeded()
+                let elapsed = Date().timeIntervalSince(start)
+                print(String(format: "[Superwall] Main thread config took %.2fs", elapsed))
             }
             
-            // Preload the campaign trigger paywall in background
-            do {
-                try await Superwall.shared.preloadPaywalls(forPlacements: ["campaign_trigger"])
-                print("[Superwall] Pre-warm complete - paywall preloaded")
-            } catch {
-                print("[Superwall] Paywall preload failed: \(error.localizedDescription)")
+            // Additional delay before preloading paywall
+            // This is what actually triggers WKWebView process launches
+            Thread.sleep(forTimeInterval: 2.0)
+            
+            // Preload paywall completely in background
+            Task.detached(priority: .background) {
+                do {
+                    try await Superwall.shared.preloadPaywalls(forPlacements: ["campaign_trigger"])
+                    print("[Superwall] Pre-warm complete - paywall preloaded")
+                } catch {
+                    print("[Superwall] Paywall preload failed: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -89,8 +113,22 @@ final class SuperwallManager {
 class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
+        print("[App] 🚀 didFinishLaunchingWithOptions START - \(Date())")
+        
         // Configure Firebase
+        let firebaseStart = Date()
         FirebaseApp.configure()
+        print(String(format: "[App] Firebase.configure() took %.3fs", Date().timeIntervalSince(firebaseStart)))
+        
+        // CRITICAL: Disable Crashlytics in DEBUG builds
+        // Crashlytics does heavy main-thread work (symbol uploads, XPC connections)
+        // that causes 3-10 second UI freezes. Only enable in Release builds.
+        #if DEBUG
+        Crashlytics.crashlytics().setCrashlyticsCollectionEnabled(false)
+        print("[Crashlytics] Disabled for DEBUG build")
+        #else
+        print("[Crashlytics] Enabled for RELEASE build")
+        #endif
         
         // IMPORTANT: Completely disable Firebase In-App Messaging
         // It's not enabled in Firebase Console and causes repeated 403 errors
@@ -117,28 +155,14 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         
         print("[Firebase] Configured successfully with offline persistence")
         
-        // Defer PostHog initialization to background to not block app launch
-        // Network calls can timeout and block the main thread
-        DispatchQueue.global(qos: .utility).async {
-            let POSTHOG_API_KEY = "phc_2nAwTZByOmyniSMOvQ7B16WlGGiKJ47rUT6cAC9RLvH"
-            let POSTHOG_HOST = "https://us.i.posthog.com"
-            
-            let config = PostHogConfig(apiKey: POSTHOG_API_KEY, host: POSTHOG_HOST)
-            config.sessionReplay = true
-            config.sessionReplayConfig.maskAllImages = false
-            config.sessionReplayConfig.maskAllTextInputs = true
-            config.sessionReplayConfig.screenshotMode = true
-            
-            DispatchQueue.main.async {
-                PostHogSDK.shared.setup(config)
-                print("[PostHog] Configured (deferred)")
-            }
-        }
+        // Defer analytics until after onboarding to keep first-run silky smooth
+        print("[Analytics] PostHog setup deferred until onboarding completes")
         
         // NOTE: Superwall is now lazily initialized on first paywall trigger
         // to avoid WKWebView blocking app startup with network issues
         print("[Superwall] Deferred initialization (will configure on first use)")
         
+        print("[App] ✅ didFinishLaunchingWithOptions COMPLETE - \(Date())")
         return true
     }
     

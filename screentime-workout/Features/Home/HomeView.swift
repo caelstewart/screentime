@@ -7,6 +7,8 @@
 
 import SwiftUI
 import SwiftData
+import FamilyControls
+import ManagedSettings
 
 struct HomeView: View {
     @Environment(\.modelContext) private var modelContext
@@ -14,6 +16,7 @@ struct HomeView: View {
     @State private var viewModel = HomeViewModel()
     @State private var selectedExercise: Exercise?
     @State private var showingWorkout = false
+    @State private var showingBlockedApps = false
     
     // Animation states
     @State private var animateBalance = false
@@ -52,10 +55,10 @@ struct HomeView: View {
                     limitsStatusRow
                         .padding(.horizontal, 16)
                     
-#if DEBUG
-                    debugToolsCard
-                        .padding(.horizontal, 16)
-#endif
+// #if DEBUG
+//                     debugToolsCard
+//                         .padding(.horizontal, 16)
+// #endif
                     
                     // Info banner explaining Apple limitation
                     // Only show after user has left and returned (not immediately after earning)
@@ -104,6 +107,9 @@ struct HomeView: View {
                 }
             )
         }
+        .sheet(isPresented: $showingBlockedApps) {
+            BlockedAppsSheet()
+        }
         .onAppear {
             let start = Date()
             viewModel.loadBalance(context: modelContext)
@@ -151,24 +157,28 @@ struct HomeView: View {
             Spacer()
             
             HStack(spacing: 6) {
-                // Blocked apps indicator (if any)
+                // Blocked apps indicator (if any) - tappable to show list
                 if viewModel.hasBlockedApps {
-                    HStack(spacing: 4) {
-                        Image(systemName: "lock.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.red)
-                        Text("\(viewModel.blockedAppsCount)")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
-                            .foregroundStyle(.white)
+                    Button {
+                        showingBlockedApps = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "lock.fill")
+                                .font(.system(size: 12))
+                                .foregroundStyle(.red)
+                            Text("\(viewModel.blockedAppsCount)")
+                                .font(.system(size: 15, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.red.opacity(0.15))
+                        .clipShape(Capsule())
+                        .overlay(
+                            Capsule()
+                                .stroke(Color.red.opacity(0.3), lineWidth: 1)
+                        )
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(Color.red.opacity(0.15))
-                    .clipShape(Capsule())
-                    .overlay(
-                        Capsule()
-                            .stroke(Color.red.opacity(0.3), lineWidth: 1)
-                    )
                 }
                 
                 // Streak Badge
@@ -302,23 +312,29 @@ struct HomeView: View {
                 
                 // Action Button - different states
                 if viewModel.hasBlockedApps {
-                    // Apps are blocked - prompt to workout
-                    VStack(spacing: 8) {
-                        HStack {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                            Text("\(viewModel.blockedAppsCount) app\(viewModel.blockedAppsCount == 1 ? "" : "s") blocked")
+                    // Apps are blocked - tappable to show list
+                    Button {
+                        showingBlockedApps = true
+                    } label: {
+                        VStack(spacing: 8) {
+                            HStack {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                Text("\(viewModel.blockedAppsCount) app\(viewModel.blockedAppsCount == 1 ? "" : "s") blocked")
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 12, weight: .semibold))
+                            }
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.red)
+                            
+                            Text("Tap to see blocked apps • Complete a workout to earn time")
+                                .font(.system(size: 13))
+                                .foregroundStyle(Theme.Colors.textSecondary)
                         }
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(.red)
-                        
-                        Text("Complete a workout to earn more time")
-                            .font(.system(size: 13))
-                            .foregroundStyle(Theme.Colors.textSecondary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(Color.red.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
                     }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 16)
-                    .background(Color.red.opacity(0.1))
-                    .clipShape(RoundedRectangle(cornerRadius: 18))
                     .padding([.horizontal, .bottom], 16)
                 } else if viewModel.isUnlocked {
                     // Legacy unlocked state
@@ -557,5 +573,156 @@ struct ScaleButtonStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.spring(response: 0.3, dampingFraction: 0.6), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Blocked Apps Sheet
+
+struct BlockedAppsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    
+    private var blockedApps: [ApplicationToken] {
+        Array(ScreenTimeManager.shared.blockedApps)
+    }
+    
+    private var blockedCategories: [ActivityCategoryToken] {
+        Array(ScreenTimeManager.shared.blockedCategories)
+    }
+    
+    private var totalBlocked: Int {
+        blockedApps.count + blockedCategories.count
+    }
+    
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                Theme.Colors.background
+                    .ignoresSafeArea()
+                
+                if totalBlocked == 0 {
+                    // No blocked apps
+                    VStack(spacing: 16) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.system(size: 60))
+                            .foregroundStyle(Theme.Colors.success)
+                        
+                        Text("No Apps Blocked")
+                            .font(.system(size: 22, weight: .bold))
+                            .foregroundStyle(.white)
+                        
+                        Text("All your apps are currently accessible.")
+                            .font(.system(size: 16))
+                            .foregroundStyle(Theme.Colors.textSecondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
+                } else {
+                    ScrollView {
+                        VStack(spacing: 16) {
+                            // Header info
+                            VStack(spacing: 8) {
+                                Image(systemName: "lock.shield.fill")
+                                    .font(.system(size: 40))
+                                    .foregroundStyle(.red)
+                                
+                                Text("\(totalBlocked) app\(totalBlocked == 1 ? "" : "s") blocked")
+                                    .font(.system(size: 18, weight: .bold))
+                                    .foregroundStyle(.white)
+                                
+                                Text("Complete a workout to earn more screen time")
+                                    .font(.system(size: 14))
+                                    .foregroundStyle(Theme.Colors.textSecondary)
+                            }
+                            .padding(.top, 8)
+                            .padding(.bottom, 16)
+                            
+                            // Blocked Apps List
+                            if !blockedApps.isEmpty {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("BLOCKED APPS")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(Theme.Colors.textMuted)
+                                        .tracking(1.5)
+                                        .padding(.horizontal, 4)
+                                    
+                                    ForEach(Array(blockedApps.enumerated()), id: \.offset) { _, token in
+                                        HStack(spacing: 14) {
+                                            Label(token)
+                                                .labelStyle(.iconOnly)
+                                                .scaleEffect(1.8)
+                                                .frame(width: 48, height: 48)
+                                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                            
+                                            Label(token)
+                                                .labelStyle(.titleOnly)
+                                                .font(.system(size: 16, weight: .medium))
+                                                .foregroundStyle(.white)
+                                            
+                                            Spacer()
+                                            
+                                            Image(systemName: "lock.fill")
+                                                .font(.system(size: 14))
+                                                .foregroundStyle(.red.opacity(0.7))
+                                        }
+                                        .padding(12)
+                                        .background(Theme.Colors.cardBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                                    }
+                                }
+                            }
+                            
+                            // Blocked Categories List
+                            if !blockedCategories.isEmpty {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("BLOCKED CATEGORIES")
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundStyle(Theme.Colors.textMuted)
+                                        .tracking(1.5)
+                                        .padding(.horizontal, 4)
+                                    
+                                    ForEach(Array(blockedCategories.enumerated()), id: \.offset) { _, token in
+                                        HStack(spacing: 14) {
+                                            Label(token)
+                                                .labelStyle(.iconOnly)
+                                                .scaleEffect(1.8)
+                                                .frame(width: 48, height: 48)
+                                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                                            
+                                            Label(token)
+                                                .labelStyle(.titleOnly)
+                                                .font(.system(size: 16, weight: .medium))
+                                                .foregroundStyle(.white)
+                                            
+                                            Spacer()
+                                            
+                                            Image(systemName: "lock.fill")
+                                                .font(.system(size: 14))
+                                                .foregroundStyle(.red.opacity(0.7))
+                                        }
+                                        .padding(12)
+                                        .background(Theme.Colors.cardBackground)
+                                        .clipShape(RoundedRectangle(cornerRadius: 14))
+                                    }
+                                }
+                            }
+                            
+                            Spacer(minLength: 40)
+                        }
+                        .padding(.horizontal, 16)
+                    }
+                }
+            }
+            .navigationTitle("Blocked Apps")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                    .foregroundStyle(Theme.Colors.primary)
+                }
+            }
+        }
     }
 }
