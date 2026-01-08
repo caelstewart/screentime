@@ -1,0 +1,4 @@
+{"identity":{"generator":"Crashlytics iOS SDK/12.7.0","display_version":"12.7.0","build_version":"12.7.0","started_at":1767758841,"session_id":"cef009e9339f47efb4c74e1f428f8a0f","app_quality_session_id":"843d3f49ae4747ccaff4e794b9467456","install_id":"","beta_token":"","absolute_log_timestamps":true}}
+{"host":{"model":"iPhone14,5","machine":"D17AP","os_build_version":"23B85","os_display_version":"26.1.0","platform":"ios","firebase_platform":"ios","locale":"en_CA"}}
+{"application":{"bundle_id":"app.screentime-workout","custom_bundle_id":null,"build_version":"1","display_version":"1.0.0","extension_id":null}}
+{"executable":{"architecture":"arm64","uuid":"8b80d904c04830168ab42fcc655b35e1","base":4364271616,"size":49152,"encrypted":false,"minimum_sdk_version":"0.0.0","built_sdk_version":"0.0.0"}}

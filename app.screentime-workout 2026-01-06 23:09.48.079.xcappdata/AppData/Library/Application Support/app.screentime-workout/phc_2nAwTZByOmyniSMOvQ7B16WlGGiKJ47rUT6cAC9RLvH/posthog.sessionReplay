@@ -1,0 +1,1 @@
+{"endpoint":"\/s\/","urlBlocklist":[],"minimumDurationMilliseconds":null,"masking":{"maskAllInputs":true},"recorderVersion":"v2","scriptConfig":{"script":"posthog-recorder"},"networkPayloadCapture":null,"eventTriggers":[],"consoleLogRecordingEnabled":true,"urlTriggers":[],"triggerMatchType":null,"sampleRate":null,"linkedFlag":null}

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>com.apple.SwiftUI.sceneID</key>
+	<string>SwiftUI.ModifiedContent&lt;SwiftUI.(unknown context at $1ab25c628).SceneBridgeReader&lt;SwiftUI.SubscriptionView&lt;Combine.PassthroughSubject&lt;Any, Swift.Never&gt;, screentime_workout.ContentView&gt;&gt;, SwiftUI._AppearanceActionModifier&gt;-1</string>
+</dict>
+</plist>
