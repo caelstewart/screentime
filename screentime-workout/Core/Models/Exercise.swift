@@ -43,7 +43,7 @@ enum ExerciseType: String, Codable, CaseIterable {
 struct Exercise: Identifiable, Codable {
     let id: UUID
     let type: ExerciseType
-    let minutesPerUnit: Int  // Minutes earned per rep (or per 10 seconds for plank)
+    let minutesPerUnit: Int  // Minutes earned per rep (or per 20 seconds for plank)
     
     init(id: UUID = UUID(), type: ExerciseType, minutesPerUnit: Int = 2) {
         self.id = id
@@ -59,9 +59,9 @@ struct Exercise: Identifiable, Codable {
     }
     
     // Default exercises
-    static let pushUps = Exercise(type: .pushUps, minutesPerUnit: 2)
-    static let squats = Exercise(type: .squats, minutesPerUnit: 2)
-    static let plank = Exercise(type: .plank, minutesPerUnit: 1) // 1 min per 10 seconds held
+    static let pushUps = Exercise(type: .pushUps, minutesPerUnit: 2)  // 2 min per push-up
+    static let squats = Exercise(type: .squats, minutesPerUnit: 2)    // 2 min per squat
+    static let plank = Exercise(type: .plank, minutesPerUnit: 1)      // 1 min per 20 seconds held
     
     static let allDefault: [Exercise] = [.pushUps, .squats, .plank]
 }

@@ -92,7 +92,7 @@ struct LoginView: View {
                         authManager.handleAppleSignInRequest(request)
                     } onCompletion: { result in
                         Task {
-                            await authManager.handleAppleSignInCompletion(result)
+                            _ = await authManager.handleAppleSignInCompletion(result)
                         }
                     }
                     .signInWithAppleButtonStyle(.white)
@@ -102,7 +102,7 @@ struct LoginView: View {
                     // Google Sign In
                     Button {
                         Task {
-                            try? await authManager.signInWithGoogle()
+                            _ = await authManager.signInWithGoogle()
                         }
                     } label: {
                         HStack(spacing: 12) {

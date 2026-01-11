@@ -55,54 +55,51 @@ final class SuperwallManager {
     func preWarm() {
         guard Self.isEnabled, !isPreWarmed else { return }
         isPreWarmed = true
-        print("[Superwall] Pre-warming started (background)...")
+        print("[Superwall] Pre-warming started...")
         
-        // Use DispatchQueue instead of Task to ensure true background execution
-        // WKWebView initialization can block main thread for 10+ seconds
-        // We delay significantly to ensure UI is fully responsive first
-        DispatchQueue.global(qos: .background).async { [self] in
-            // LONG delay - let the entire onboarding flow be responsive first
-            // WKWebView will block main thread when it finally loads
-            Thread.sleep(forTimeInterval: 5.0)
-            
-            print("[Superwall] Starting main thread config after 5s delay...")
-            
-            // Configure on main thread (Superwall requires it)
-            DispatchQueue.main.async {
-                let start = Date()
-                self.configureIfNeeded()
-                let elapsed = Date().timeIntervalSince(start)
-                print(String(format: "[Superwall] Main thread config took %.2fs", elapsed))
-            }
-            
-            // Additional delay before preloading paywall
-            // This is what actually triggers WKWebView process launches
-            Thread.sleep(forTimeInterval: 2.0)
-            
-            // Preload paywall completely in background
-            Task.detached(priority: .background) {
-                do {
-                    try await Superwall.shared.preloadPaywalls(forPlacements: ["campaign_trigger"])
-                    print("[Superwall] Pre-warm complete - paywall preloaded")
-                } catch {
-                    print("[Superwall] Paywall preload failed: \(error.localizedDescription)")
-                }
+        // Configure immediately on main thread - user is viewing journey chart
+        // so brief blocking is acceptable
+        let configStart = Date()
+        configureIfNeeded()
+        let configTime = Date().timeIntervalSince(configStart)
+        print(String(format: "[Superwall] ⏱️ Config completed in %.2fs", configTime))
+        
+        // Preload paywall in background
+        Task.detached(priority: .userInitiated) {
+            do {
+                let preloadStart = Date()
+                try await Superwall.shared.preloadPaywalls(forPlacements: ["campaign_trigger"])
+                let preloadTime = Date().timeIntervalSince(preloadStart)
+                print(String(format: "[Superwall] ✅ Paywall preloaded in %.2fs", preloadTime))
+            } catch {
+                print("[Superwall] ❌ Paywall preload failed: \(error.localizedDescription)")
             }
         }
     }
     
     /// Safe wrapper for Superwall.shared.register - won't crash or block if disabled
     func register(placement: String, completion: (() -> Void)? = nil) {
+        let registerStart = Date()
+        print("[Superwall] 📱 register('\(placement)') called - isConfigured: \(isConfigured)")
+        
         guard Self.isEnabled else {
-            print("[Superwall] Disabled - skipping paywall for '\(placement)'")
+            print("[Superwall] ⏭️ Disabled - skipping paywall for '\(placement)'")
             completion?()
             return
         }
         
         // Configure lazily on first use (should already be done via preWarm)
+        let configStart = Date()
         configureIfNeeded()
+        let configTime = Date().timeIntervalSince(configStart)
+        if configTime > 0.01 {
+            print(String(format: "[Superwall] ⏱️ Config took %.2fs", configTime))
+        }
         
+        print("[Superwall] 🎯 Calling Superwall.shared.register...")
         Superwall.shared.register(placement: placement) {
+            let totalTime = Date().timeIntervalSince(registerStart)
+            print(String(format: "[Superwall] ✅ Paywall flow completed in %.2fs", totalTime))
             completion?()
         }
     }

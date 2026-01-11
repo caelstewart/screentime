@@ -15,6 +15,8 @@ struct ActiveWorkoutView: View {
     
     @State private var poseDetector = PoseDetector()
     @State private var pushUpAnalyzer = PushUpAnalyzer()
+    @State private var squatAnalyzer = SquatAnalyzer()
+    @State private var plankAnalyzer = PlankAnalyzer()
     @State private var elapsedTime: TimeInterval = 0
     @State private var timer: Timer?
     @State private var showCompleteButton = false
@@ -25,6 +27,36 @@ struct ActiveWorkoutView: View {
     @State private var confettiTrigger = 0
     
     private let minimumReps = 1
+    
+    // MARK: - Computed Properties for Current Analyzer
+    
+    private var currentRepCount: Int {
+        switch exercise.type {
+        case .pushUps: return pushUpAnalyzer.repCount
+        case .squats: return squatAnalyzer.repCount
+        case .plank: return plankAnalyzer.repCount
+        }
+    }
+    
+    private var currentFeedback: String {
+        switch exercise.type {
+        case .pushUps: return pushUpAnalyzer.feedback
+        case .squats: return squatAnalyzer.feedback
+        case .plank: return plankAnalyzer.feedback
+        }
+    }
+    
+    private var showCurrentPositioningFeedback: Bool {
+        switch exercise.type {
+        case .pushUps: return pushUpAnalyzer.showPositioningFeedback
+        case .squats: return squatAnalyzer.showPositioningFeedback
+        case .plank: return plankAnalyzer.showPositioningFeedback
+        }
+    }
+    
+    private var plankSecondsHeld: Int {
+        plankAnalyzer.secondsHeld
+    }
     
     var body: some View {
         ZStack {
@@ -93,17 +125,33 @@ struct ActiveWorkoutView: View {
                     
                     // Center: Counter
                     VStack(spacing: 0) {
-                        Text("\(pushUpAnalyzer.repCount)")
-                            .font(.system(size: 96, weight: .heavy, design: .rounded))
-                            .foregroundStyle(Theme.Gradients.counterText)
-                            .shadow(color: Theme.Colors.primary.opacity(0.3), radius: 10, x: 0, y: 0)
-                            .contentTransition(.numericText())
-                        
-                        Text("REPS")
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundStyle(Theme.Colors.primary.opacity(0.8))
-                            .tracking(4)
-                            .offset(y: -10)
+                        if exercise.type == .plank {
+                            // For plank: show seconds held as main number
+                            Text("\(plankSecondsHeld)")
+                                .font(.system(size: 96, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Theme.Gradients.counterText)
+                                .shadow(color: Theme.Colors.primary.opacity(0.3), radius: 10, x: 0, y: 0)
+                                .contentTransition(.numericText())
+                            
+                            Text("SECONDS")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Theme.Colors.primary.opacity(0.8))
+                                .tracking(4)
+                                .offset(y: -10)
+                        } else {
+                            // For push-ups and squats: show rep count
+                            Text("\(currentRepCount)")
+                                .font(.system(size: 96, weight: .heavy, design: .rounded))
+                                .foregroundStyle(Theme.Gradients.counterText)
+                                .shadow(color: Theme.Colors.primary.opacity(0.3), radius: 10, x: 0, y: 0)
+                                .contentTransition(.numericText())
+                            
+                            Text("REPS")
+                                .font(.system(size: 14, weight: .bold))
+                                .foregroundStyle(Theme.Colors.primary.opacity(0.8))
+                                .tracking(4)
+                                .offset(y: -10)
+                        }
                     }
                     
                     Spacer()
@@ -175,15 +223,16 @@ struct ActiveWorkoutView: View {
         .onDisappear {
             stopWorkout()
         }
-        .onChange(of: pushUpAnalyzer.repCount) { oldValue, newValue in
-            // Trigger confetti every 5 reps
-            if newValue > 0 && newValue % 5 == 0 && newValue > oldValue {
+        .onChange(of: currentRepCount) { oldValue, newValue in
+            // Trigger confetti every 5 reps (or every 60 seconds for plank = 3 reps)
+            let confettiInterval = exercise.type == .plank ? 3 : 5
+            if newValue > 0 && newValue % confettiInterval == 0 && newValue > oldValue {
                 triggerConfetti()
             }
         }
     }
     
-    // MARK: - Computed Properties
+    // MARK: - Time Formatting
     
     private var formattedTime: String {
         let minutes = Int(elapsedTime) / 60
@@ -192,23 +241,39 @@ struct ActiveWorkoutView: View {
     }
     
     private var earnedMinutes: Int {
-        exercise.calculateEarnedMinutes(units: pushUpAnalyzer.repCount)
+        exercise.calculateEarnedMinutes(units: currentRepCount)
     }
     
     // MARK: - Methods
     
     private func startWorkout() {
-        print("[ActiveWorkout] Starting workout, camera configured: \(cameraManager.isConfigured)")
+        print("[ActiveWorkout] Starting \(exercise.type.displayName) workout, camera configured: \(cameraManager.isConfigured)")
+        
+        // Reset the appropriate analyzer
+        switch exercise.type {
+        case .pushUps:
+            pushUpAnalyzer.reset()
+        case .squats:
+            squatAnalyzer.reset()
+        case .plank:
+            plankAnalyzer.reset()
+        }
         
         cameraManager.frameHandler = { buffer in
             frameCount += 1
             poseDetector.processFrame(buffer)
             
             DispatchQueue.main.async {
-                if let pose = poseDetector.detectedPose {
+                let pose = poseDetector.detectedPose
+                
+                // Use the appropriate analyzer based on exercise type
+                switch exercise.type {
+                case .pushUps:
                     pushUpAnalyzer.analyze(pose: pose)
-                } else {
-                    pushUpAnalyzer.analyze(pose: nil)
+                case .squats:
+                    squatAnalyzer.analyze(pose: pose)
+                case .plank:
+                    plankAnalyzer.analyze(pose: pose)
                 }
             }
         }
@@ -230,7 +295,7 @@ struct ActiveWorkoutView: View {
     
     private func completeWorkout() {
         stopWorkout()
-        onComplete(pushUpAnalyzer.repCount)
+        onComplete(currentRepCount)
     }
     
     private func triggerConfetti() {

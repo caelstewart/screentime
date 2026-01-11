@@ -84,20 +84,128 @@ final class ScreenTimeManager {
         checkAuthorization()
         loadSelection()
         
-        // Observe app becoming active to recheck authorization
+        // Load any blocked state from shared defaults (set by extension)
+        refreshBlockedStateFromExtension()
+        
+        // Observe app becoming active to recheck authorization and blocked state
         NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             self?.checkAuthorization()
+            self?.refreshBlockedStateFromExtension()
         }
+        
+        // Listen for Darwin notifications from the extension when it blocks apps
+        setupDarwinNotificationListener()
         
         // Immediately verify App Group access so we can surface sandbox issues loudly
         verifyAppGroupAccess()
 #if DEBUG
         logExtensionBundleStatus()
 #endif
+    }
+    
+    /// Set up listener for Darwin notifications from DeviceActivityMonitor extension
+    private func setupDarwinNotificationListener() {
+        let name = "app.screentime-workout.limitReached" as CFString
+        let center = CFNotificationCenterGetDarwinNotifyCenter()
+        
+        CFNotificationCenterAddObserver(
+            center,
+            Unmanaged.passUnretained(self).toOpaque(),
+            { (center, observer, name, object, userInfo) in
+                // This callback runs on an arbitrary thread, dispatch to main
+                DispatchQueue.main.async {
+                    print("[ScreenTime] 📣 Received Darwin notification - limit reached!")
+                    ScreenTimeManager.shared.refreshBlockedStateFromExtension()
+                }
+            },
+            name,
+            nil,
+            .deliverImmediately
+        )
+        print("[ScreenTime] Darwin notification listener registered")
+    }
+    
+    /// Refresh blocked apps/categories state from shared UserDefaults (written by extension)
+    func refreshBlockedStateFromExtension() {
+        guard let defaults = sharedDefaults else {
+            print("[ScreenTime][Refresh] ❌ Cannot refresh blocked state - no shared defaults")
+            return
+        }
+        
+        print("[ScreenTime][Refresh] 🔄 Reading blocked state from shared defaults...")
+        
+        var didUpdate = false
+        var newAppsCount = 0
+        var newCatsCount = 0
+        
+        // Read blocked apps
+        if let appData = defaults.data(forKey: "currentlyBlocked_apps") {
+            print("[ScreenTime][Refresh]   Found app data: \(appData.count) bytes")
+            do {
+                let apps = try PropertyListDecoder().decode(Set<ApplicationToken>.self, from: appData)
+                newAppsCount = apps.count
+                if apps != blockedApps {
+                    blockedApps = apps
+                    didUpdate = true
+                    print("[ScreenTime][Refresh]   ✅ Updated blocked apps: \(apps.count)")
+                } else {
+                    print("[ScreenTime][Refresh]   No change in blocked apps: \(apps.count)")
+                }
+            } catch {
+                print("[ScreenTime][Refresh]   ❌ Failed to decode blocked apps: \(error)")
+            }
+        } else {
+            print("[ScreenTime][Refresh]   No 'currentlyBlocked_apps' key in shared defaults")
+            if !blockedApps.isEmpty {
+                print("[ScreenTime][Refresh]   Clearing in-memory blocked apps (had \(blockedApps.count))")
+                blockedApps.removeAll()
+                didUpdate = true
+            }
+        }
+        
+        // Read blocked categories
+        if let catData = defaults.data(forKey: "currentlyBlocked_categories") {
+            print("[ScreenTime][Refresh]   Found category data: \(catData.count) bytes")
+            do {
+                let cats = try PropertyListDecoder().decode(Set<ActivityCategoryToken>.self, from: catData)
+                newCatsCount = cats.count
+                if cats != blockedCategories {
+                    blockedCategories = cats
+                    didUpdate = true
+                    print("[ScreenTime][Refresh]   ✅ Updated blocked categories: \(cats.count)")
+                } else {
+                    print("[ScreenTime][Refresh]   No change in blocked categories: \(cats.count)")
+                }
+            } catch {
+                print("[ScreenTime][Refresh]   ❌ Failed to decode blocked categories: \(error)")
+            }
+        } else {
+            print("[ScreenTime][Refresh]   No 'currentlyBlocked_categories' key in shared defaults")
+            if !blockedCategories.isEmpty {
+                print("[ScreenTime][Refresh]   Clearing in-memory blocked categories (had \(blockedCategories.count))")
+                blockedCategories.removeAll()
+                didUpdate = true
+            }
+        }
+        
+        // Also check the timestamp for debugging
+        if let timestamp = defaults.object(forKey: "currentlyBlocked_timestamp") as? Date {
+            let formatter = ISO8601DateFormatter()
+            print("[ScreenTime][Refresh]   Timestamp: \(formatter.string(from: timestamp))")
+        } else {
+            print("[ScreenTime][Refresh]   No timestamp found")
+        }
+        
+        if didUpdate {
+            shieldsActive = !blockedApps.isEmpty || !blockedCategories.isEmpty
+            print("[ScreenTime][Refresh] 📊 State updated - apps: \(blockedApps.count), cats: \(blockedCategories.count), shieldsActive: \(shieldsActive)")
+        } else {
+            print("[ScreenTime][Refresh] No changes - apps: \(newAppsCount), cats: \(newCatsCount)")
+        }
     }
 
     /// Attempts to read/write inside the shared App Group so we can detect sandbox issues.
@@ -422,18 +530,33 @@ final class ScreenTimeManager {
     
     /// Apply shields to specific apps (blocks them)
     func shieldApps(_ tokens: Set<ApplicationToken>) {
-        guard isAuthorized else { return }
+        guard isAuthorized else {
+            print("[ScreenTime][ShieldApps] ❌ Not authorized")
+            return
+        }
+        
+        print("[ScreenTime][ShieldApps] 🛡️ Shielding \(tokens.count) apps...")
+        print("[ScreenTime][ShieldApps]   Before: apps=\(blockedApps.count), cats=\(blockedCategories.count)")
         
         blockedApps.formUnion(tokens)
         store.shield.applications = blockedApps.isEmpty ? nil : blockedApps
         shieldsActive = !blockedApps.isEmpty || !blockedCategories.isEmpty
         
-        print("[ScreenTime] Shielded \(tokens.count) apps, total blocked: \(blockedApps.count)")
+        print("[ScreenTime][ShieldApps]   After: apps=\(blockedApps.count), cats=\(blockedCategories.count), shieldsActive=\(shieldsActive)")
+        
+        // Also update shared defaults so extension and UI stay in sync
+        saveBlockedStateToSharedDefaults()
     }
     
     /// Apply shields to specific categories
     func shieldCategories(_ tokens: Set<ActivityCategoryToken>) {
-        guard isAuthorized else { return }
+        guard isAuthorized else {
+            print("[ScreenTime][ShieldCats] ❌ Not authorized")
+            return
+        }
+        
+        print("[ScreenTime][ShieldCats] 🛡️ Shielding \(tokens.count) categories...")
+        print("[ScreenTime][ShieldCats]   Before: apps=\(blockedApps.count), cats=\(blockedCategories.count)")
         
         blockedCategories.formUnion(tokens)
         if blockedCategories.isEmpty {
@@ -443,7 +566,52 @@ final class ScreenTimeManager {
         }
         shieldsActive = !blockedApps.isEmpty || !blockedCategories.isEmpty
         
-        print("[ScreenTime] Shielded \(tokens.count) categories, total blocked: \(blockedCategories.count)")
+        print("[ScreenTime][ShieldCats]   After: apps=\(blockedApps.count), cats=\(blockedCategories.count), shieldsActive=\(shieldsActive)")
+        
+        // Also update shared defaults so extension and UI stay in sync
+        saveBlockedStateToSharedDefaults()
+    }
+    
+    /// Save current blocked state to shared UserDefaults (for extension and UI sync)
+    private func saveBlockedStateToSharedDefaults() {
+        guard let defaults = sharedDefaults else {
+            print("[ScreenTime][SaveState] ❌ No shared defaults available")
+            return
+        }
+        
+        print("[ScreenTime][SaveState] 💾 Saving blocked state...")
+        print("[ScreenTime][SaveState]   In-memory: apps=\(blockedApps.count), cats=\(blockedCategories.count)")
+        
+        if !blockedApps.isEmpty {
+            if let data = try? PropertyListEncoder().encode(blockedApps) {
+                defaults.set(data, forKey: "currentlyBlocked_apps")
+                print("[ScreenTime][SaveState]   ✅ Saved \(blockedApps.count) apps (\(data.count) bytes)")
+            } else {
+                print("[ScreenTime][SaveState]   ❌ Failed to encode apps")
+            }
+        } else {
+            defaults.removeObject(forKey: "currentlyBlocked_apps")
+            print("[ScreenTime][SaveState]   Removed apps key (empty)")
+        }
+        
+        if !blockedCategories.isEmpty {
+            if let data = try? PropertyListEncoder().encode(blockedCategories) {
+                defaults.set(data, forKey: "currentlyBlocked_categories")
+                print("[ScreenTime][SaveState]   ✅ Saved \(blockedCategories.count) categories (\(data.count) bytes)")
+            } else {
+                print("[ScreenTime][SaveState]   ❌ Failed to encode categories")
+            }
+        } else {
+            defaults.removeObject(forKey: "currentlyBlocked_categories")
+            print("[ScreenTime][SaveState]   Removed categories key (empty)")
+        }
+        
+        let timestamp = Date()
+        defaults.set(timestamp, forKey: "currentlyBlocked_timestamp")
+        defaults.synchronize()
+        
+        let formatter = ISO8601DateFormatter()
+        print("[ScreenTime][SaveState] ✅ Saved with timestamp: \(formatter.string(from: timestamp))")
     }
     
     /// Remove shield from specific app (called when user earns time)
@@ -468,16 +636,50 @@ final class ScreenTimeManager {
         print("[ScreenTime] Unshielded category, remaining blocked: \(blockedCategories.count)")
     }
     
-    /// Remove ALL shields
+    /// Remove ALL shields from ManagedSettingsStore, in-memory state, AND shared defaults
+    /// This ensures UI state stays in sync with actual shield state
     func removeAllShields() {
+        print("[ScreenTime][RemoveShields] 🧹 Removing all shields...")
+        print("[ScreenTime][RemoveShields]   Before: apps=\(blockedApps.count), cats=\(blockedCategories.count), shieldsActive=\(shieldsActive)")
+        
+        // Clear ManagedSettingsStore (actual shields)
         store.shield.applications = nil
         store.shield.applicationCategories = nil
         store.shield.webDomains = nil
+        
+        // Clear in-memory state
         blockedApps.removeAll()
         blockedCategories.removeAll()
         shieldsActive = false
         
-        print("[ScreenTime] All shields removed")
+        // Clear shared defaults so UI stays in sync
+        clearBlockedStateInSharedDefaults()
+        
+        print("[ScreenTime][RemoveShields]   After: apps=\(blockedApps.count), cats=\(blockedCategories.count), shieldsActive=\(shieldsActive)")
+        print("[ScreenTime][RemoveShields] ✅ All shields removed")
+    }
+    
+    /// Alias for removeAllShields() - both now do the same thing
+    func removeAllShieldsAndClearState() {
+        removeAllShields()
+    }
+    
+    /// Clear blocked state from shared UserDefaults
+    private func clearBlockedStateInSharedDefaults() {
+        guard let defaults = sharedDefaults else {
+            print("[ScreenTime][ClearState] ❌ No shared defaults available")
+            return
+        }
+        
+        let hadApps = defaults.data(forKey: "currentlyBlocked_apps") != nil
+        let hadCats = defaults.data(forKey: "currentlyBlocked_categories") != nil
+        
+        defaults.removeObject(forKey: "currentlyBlocked_apps")
+        defaults.removeObject(forKey: "currentlyBlocked_categories")
+        defaults.removeObject(forKey: "currentlyBlocked_timestamp")
+        defaults.synchronize()
+        
+        print("[ScreenTime][ClearState] 🧹 Cleared shared defaults (had apps: \(hadApps), had cats: \(hadCats))")
     }
     
     // MARK: - Bonus Time Management (Shared Pool)

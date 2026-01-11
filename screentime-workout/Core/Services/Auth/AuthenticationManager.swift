@@ -108,8 +108,9 @@ final class AuthenticationManager: NSObject {
     
     // MARK: - Google Sign In
     
+    /// Returns `true` if sign-in succeeded, `false` if cancelled or failed
     @MainActor
-    func signInWithGoogle() async throws {
+    func signInWithGoogle() async -> Bool {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -120,7 +121,7 @@ final class AuthenticationManager: NSObject {
         
         guard let clientID = FirebaseApp.app()?.options.clientID else {
             errorMessage = "Missing Firebase client ID"
-            throw AuthError.missingClientID
+            return false
         }
         
         let config = GIDConfiguration(clientID: clientID)
@@ -129,7 +130,7 @@ final class AuthenticationManager: NSObject {
         guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
               let rootViewController = windowScene.windows.first?.rootViewController else {
             errorMessage = "Unable to find root view controller"
-            throw AuthError.noRootViewController
+            return false
         }
         
         do {
@@ -137,7 +138,7 @@ final class AuthenticationManager: NSObject {
             
             guard let idToken = result.user.idToken?.tokenString else {
                 errorMessage = "Missing ID token from Google"
-                throw AuthError.missingIDToken
+                return false
             }
             
             let credential = GoogleAuthProvider.credential(
@@ -150,28 +151,41 @@ final class AuthenticationManager: NSObject {
                 do {
                     let authResult = try await currentUser.link(with: credential)
                     print("[Auth] Linked Google account to anonymous: \(authResult.user.email ?? "no email")")
+                    // Immediately update state (don't wait for listener)
+                    self.user = authResult.user
+                    self.isAuthenticated = true
+                    return true
                 } catch let linkError as NSError where linkError.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
                     // Account already exists, sign in and merge data
                     print("[Auth] Google account already exists, signing in and merging data")
                     let authResult = try await Auth.auth().signIn(with: credential)
+                    // Immediately update state
+                    self.user = authResult.user
+                    self.isAuthenticated = true
                     
                     // Merge anonymous data to the existing account
                     if let anonId = previousAnonymousId {
                         await UserDataManager.shared.mergeAnonymousData(fromAnonymousId: anonId, toRealId: authResult.user.uid)
                     }
+                    return true
                 }
             } else {
                 let authResult = try await Auth.auth().signIn(with: credential)
                 print("[Auth] Google sign in successful: \(authResult.user.email ?? "no email")")
+                // Immediately update state
+                self.user = authResult.user
+                self.isAuthenticated = true
+                return true
             }
             
         } catch let error as GIDSignInError where error.code == .canceled {
             // User cancelled - don't show error
             print("[Auth] Google sign in cancelled by user")
+            return false
         } catch {
             errorMessage = error.localizedDescription
             print("[Auth] Google sign in error: \(error)")
-            throw error
+            return false
         }
     }
     
@@ -193,8 +207,9 @@ final class AuthenticationManager: NSObject {
         request.nonce = sha256(nonce)
     }
     
+    /// Returns `true` if sign-in succeeded, `false` if cancelled or failed
     @MainActor
-    func handleAppleSignInCompletion(_ result: Result<ASAuthorization, Error>) async {
+    func handleAppleSignInCompletion(_ result: Result<ASAuthorization, Error>) async -> Bool {
         isLoading = true
         errorMessage = nil
         
@@ -210,7 +225,8 @@ final class AuthenticationManager: NSObject {
                   let idTokenString = String(data: appleIDToken, encoding: .utf8),
                   let nonce = currentNonce else {
                 errorMessage = "Unable to fetch Apple ID credentials"
-                return
+                anonymousUserId = nil
+                return false
             }
             
             let credential = OAuthProvider.appleCredential(
@@ -225,27 +241,41 @@ final class AuthenticationManager: NSObject {
                     do {
                         let authResult = try await currentUser.link(with: credential)
                         print("[Auth] Linked Apple account to anonymous: \(authResult.user.email ?? "no email")")
+                        // Immediately update state (don't wait for listener)
+                        self.user = authResult.user
+                        self.isAuthenticated = true
+                        anonymousUserId = nil
+                        return true
                     } catch let linkError as NSError where linkError.code == AuthErrorCode.credentialAlreadyInUse.rawValue {
                         // Account already exists, sign in and merge data
                         print("[Auth] Apple account already exists, signing in and merging data")
                         let authResult = try await Auth.auth().signIn(with: credential)
+                        // Immediately update state
+                        self.user = authResult.user
+                        self.isAuthenticated = true
                         
                         // Merge anonymous data to the existing account
                         if let anonId = previousAnonymousId {
                             await UserDataManager.shared.mergeAnonymousData(fromAnonymousId: anonId, toRealId: authResult.user.uid)
                         }
+                        anonymousUserId = nil
+                        return true
                     }
                 } else {
                     let authResult = try await Auth.auth().signIn(with: credential)
                     print("[Auth] Apple sign in successful: \(authResult.user.email ?? "no email")")
+                    // Immediately update state
+                    self.user = authResult.user
+                    self.isAuthenticated = true
+                    anonymousUserId = nil
+                    return true
                 }
             } catch {
                 errorMessage = error.localizedDescription
                 print("[Auth] Apple sign in error: \(error)")
+                anonymousUserId = nil
+                return false
             }
-            
-            // Clear the stored anonymous ID
-            anonymousUserId = nil
             
         case .failure(let error):
             // Don't show error if user cancelled
@@ -254,6 +284,7 @@ final class AuthenticationManager: NSObject {
             }
             print("[Auth] Apple sign in failed: \(error)")
             anonymousUserId = nil
+            return false
         }
     }
     

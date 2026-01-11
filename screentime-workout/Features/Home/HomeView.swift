@@ -15,8 +15,10 @@ struct HomeView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var viewModel = HomeViewModel()
     @State private var selectedExercise: Exercise?
-    @State private var showingWorkout = false
     @State private var showingBlockedApps = false
+    
+    // Direct reference to ScreenTimeManager to observe blocked state changes
+    private var screenTimeManager: ScreenTimeManager { ScreenTimeManager.shared }
     
     // Animation states
     @State private var animateBalance = false
@@ -51,9 +53,6 @@ struct HomeView: View {
                         .opacity(animateBalance ? 1 : 0)
                         .animation(.spring(response: 0.6, dampingFraction: 0.7), value: animateBalance)
                     
-                    // Limits status row
-                    limitsStatusRow
-                        .padding(.horizontal, 16)
                     
 // #if DEBUG
 //                     debugToolsCard
@@ -79,7 +78,6 @@ struct HomeView: View {
                             ForEach(Exercise.allDefault) { exercise in
                                 ExerciseRow(exercise: exercise) {
                                     selectedExercise = exercise
-                                    showingWorkout = true
                                 }
                             }
                         }
@@ -91,19 +89,17 @@ struct HomeView: View {
                 .padding(.top, 10)
             }
         }
-        .fullScreenCover(isPresented: $showingWorkout) {
+        .fullScreenCover(item: $selectedExercise) { exercise in
             WorkoutContainerView(
-                exercise: selectedExercise ?? .pushUps,
+                exercise: exercise,
                 onComplete: { reps in
-                    if let exercise = selectedExercise {
-                        viewModel.completeWorkout(exercise: exercise, reps: reps, context: modelContext)
-                        // Don't show the info banner right after earning bonus
-                        justEarnedBonusThisSession = true
-                    }
-                    showingWorkout = false
+                    viewModel.completeWorkout(exercise: exercise, reps: reps, context: modelContext)
+                    // Don't show the info banner right after earning bonus
+                    justEarnedBonusThisSession = true
+                    selectedExercise = nil
                 },
                 onDismiss: {
-                    showingWorkout = false
+                    selectedExercise = nil
                 }
             )
         }
@@ -119,9 +115,11 @@ struct HomeView: View {
                 animateBalance = true
             }
             print("[HomeView] UI animation triggered")
+            print("[HomeView][UI] 📊 Blocked state: apps=\(screenTimeManager.blockedApps.count), cats=\(screenTimeManager.blockedCategories.count), shieldsActive=\(screenTimeManager.shieldsActive)")
         }
         .onChange(of: scenePhase) { oldPhase, newPhase in
             print("[HomeView] 📱 Scene phase changed: \(oldPhase) → \(newPhase)")
+            print("[HomeView][UI] 📊 Blocked state: apps=\(screenTimeManager.blockedApps.count), cats=\(screenTimeManager.blockedCategories.count), shieldsActive=\(screenTimeManager.shieldsActive)")
             if newPhase == .active {
                 let activeLimits = viewModel.timeLimits.filter { $0.isActive }
                 print("[HomeView] App became ACTIVE - checking bonus expiry with \(activeLimits.count) active limits")
@@ -132,6 +130,8 @@ struct HomeView: View {
                 )
                 // Check if bonus was collapsed while app was backgrounded
                 viewModel.refresh(context: modelContext)
+                // Log again after refresh
+                print("[HomeView][UI] 📊 After refresh: apps=\(screenTimeManager.blockedApps.count), cats=\(screenTimeManager.blockedCategories.count), shieldsActive=\(screenTimeManager.shieldsActive)")
             } else if newPhase == .background || newPhase == .inactive {
                 // Reset flag so info banner shows on next app open
                 justEarnedBonusThisSession = false
@@ -158,7 +158,8 @@ struct HomeView: View {
             
             HStack(spacing: 6) {
                 // Blocked apps indicator (if any) - tappable to show list
-                if viewModel.hasBlockedApps {
+                // Uses screenTimeManager directly for proper observation
+                if screenTimeManager.shieldsActive {
                     Button {
                         showingBlockedApps = true
                     } label: {
@@ -166,7 +167,7 @@ struct HomeView: View {
                             Image(systemName: "lock.fill")
                                 .font(.system(size: 12))
                                 .foregroundStyle(.red)
-                            Text("\(viewModel.blockedAppsCount)")
+                            Text("\(screenTimeManager.blockedApps.count + screenTimeManager.blockedCategories.count)")
                                 .font(.system(size: 15, weight: .bold, design: .rounded))
                                 .foregroundStyle(.white)
                         }
@@ -311,7 +312,9 @@ struct HomeView: View {
                 .padding(.bottom, 16)
                 
                 // Action Button - different states
-                if viewModel.hasBlockedApps {
+                // Uses screenTimeManager directly for proper observation
+                let blockedCount = screenTimeManager.blockedApps.count + screenTimeManager.blockedCategories.count
+                if screenTimeManager.shieldsActive {
                     // Apps are blocked - tappable to show list
                     Button {
                         showingBlockedApps = true
@@ -319,7 +322,7 @@ struct HomeView: View {
                         VStack(spacing: 8) {
                             HStack {
                                 Image(systemName: "exclamationmark.triangle.fill")
-                                Text("\(viewModel.blockedAppsCount) app\(viewModel.blockedAppsCount == 1 ? "" : "s") blocked")
+                                Text("\(blockedCount) app\(blockedCount == 1 ? "" : "s") blocked")
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 12, weight: .semibold))
                             }
@@ -406,34 +409,7 @@ struct HomeView: View {
         return formatter.string(from: Date())
     }
     
-    // MARK: - Bonus Pool Banner
-    
-    private var limitsStatusRow: some View {
-        let activeLimits = viewModel.activeLimitsCount
-        
-        return HStack(spacing: 12) {
-            // Limits active badge
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark.shield.fill")
-                    .font(.system(size: 14))
-                    .foregroundStyle(Theme.Colors.success)
-                
-                Text("\(activeLimits) limits active")
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Theme.Colors.success.opacity(0.15))
-            .clipShape(Capsule())
-            .overlay(
-                Capsule()
-                    .stroke(Theme.Colors.success.opacity(0.3), lineWidth: 1)
-            )
-            
-            Spacer()
-        }
-    }
+    // MARK: - Info Banners
     
     private var applePrivacyInfoBanner: some View {
         HStack(spacing: 10) {
@@ -581,12 +557,15 @@ struct ScaleButtonStyle: ButtonStyle {
 struct BlockedAppsSheet: View {
     @Environment(\.dismiss) private var dismiss
     
+    // Direct reference for proper SwiftUI observation
+    private var screenTimeManager: ScreenTimeManager { ScreenTimeManager.shared }
+    
     private var blockedApps: [ApplicationToken] {
-        Array(ScreenTimeManager.shared.blockedApps)
+        Array(screenTimeManager.blockedApps)
     }
     
     private var blockedCategories: [ActivityCategoryToken] {
-        Array(ScreenTimeManager.shared.blockedCategories)
+        Array(screenTimeManager.blockedCategories)
     }
     
     private var totalBlocked: Int {

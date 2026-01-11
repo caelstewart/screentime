@@ -402,7 +402,7 @@ extension HomeViewModel {
     }
     
     func clearDebugShields() {
-        ScreenTimeManager.shared.removeAllShields()
+        ScreenTimeManager.shared.removeAllShieldsAndClearState()
     }
 }
 #endif

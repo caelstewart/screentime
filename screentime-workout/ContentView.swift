@@ -780,7 +780,7 @@ struct SettingsView: View {
                                             authManager.handleAppleSignInRequest(request)
                                         } onCompletion: { result in
                                             Task {
-                                                await authManager.handleAppleSignInCompletion(result)
+                                                _ = await authManager.handleAppleSignInCompletion(result)
                                             }
                                         }
                                         .signInWithAppleButtonStyle(.white)
@@ -789,7 +789,7 @@ struct SettingsView: View {
                                         
                                         Button {
                                             Task {
-                                                try? await authManager.signInWithGoogle()
+                                                _ = await authManager.signInWithGoogle()
                                             }
                                         } label: {
                                             HStack(spacing: 8) {
@@ -949,7 +949,7 @@ struct SettingsView: View {
                         
                         // Shield Management
                         Button {
-                            screenTimeManager.removeAllShields()
+                            screenTimeManager.removeAllShieldsAndClearState()
                         } label: {
                             HStack {
                                 Image(systemName: "shield.slash")
@@ -985,7 +985,7 @@ struct SettingsView: View {
                                 
                                 // Stop monitoring
                                 screenTimeManager.stopMonitoring()
-                                screenTimeManager.removeAllShields()
+                                screenTimeManager.removeAllShieldsAndClearState()
                                 
                                 print("[Debug] ✅ All limits deleted!")
                             }
@@ -1341,19 +1341,7 @@ struct SettingsView: View {
             Text(restoreMessage)
         }
         .fullScreenCover(isPresented: $showLoginPreview) {
-            ZStack(alignment: .topTrailing) {
-                LoginView()
-                
-                // Close button
-                Button {
-                    showLoginPreview = false
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 28))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .padding(20)
-                }
-            }
+            LoginView()
         }
         .fullScreenCover(isPresented: $showOnboardingPreview) {
             OnboardingFlowView(previewMode: true) {
@@ -2313,48 +2301,15 @@ struct OnboardingFlowView: View {
     @State private var stepChangeTimestamp: Date = .distantPast
     
     var body: some View {
-        ZStack {
-            Color.black
-                .ignoresSafeArea()
-            
-            VStack(spacing: 0) {
-                // Progress bar
-                HStack {
-                    GeometryReader { geo in
-                        ZStack(alignment: .leading) {
-                            Capsule()
-                                .fill(Color.white.opacity(0.1))
-                                .frame(height: 4)
-                            
-                            Capsule()
-                                .fill(Color.white)
-                                .frame(width: geo.size.width * currentStep.progress, height: 4)
-                                .animation(.spring(response: 0.4), value: currentStep)
-                        }
-                    }
-                    .frame(height: 4)
-                    
-                    if isPreview {
-                        Button {
-                            onComplete()
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 16, weight: .semibold))
-                                .foregroundStyle(.white.opacity(0.5))
-                                .frame(width: 32, height: 32)
-                        }
-                        .padding(.leading, 16)
-                    }
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 16)
-                .padding(.bottom, 8)
-                
-                // Content - Custom paging without forward swipe
-                ZStack {
-                    currentStepView
-                }
+        ZStack(alignment: .top) {
+            // Content fills entire screen - backgrounds extend behind progress bar
+            // but main content is pushed down with safeAreaInset
+            currentStepView
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .safeAreaInset(edge: .top, spacing: 0) {
+                    // Reserve space for progress bar (16pt top padding + 4pt bar + 12pt bottom spacing)
+                    Color.clear.frame(height: 32)
+                }
                 .offset(x: dragOffset)
                 // Disable drag gesture on steps with text input to prevent interference
                 .gesture(
@@ -2373,7 +2328,23 @@ struct OnboardingFlowView: View {
                             }
                         }
                 )
+            
+            // Progress bar overlaid on top with transparent background
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.1))
+                        .frame(height: 4)
+                    
+                    Capsule()
+                        .fill(Color.white)
+                        .frame(width: geo.size.width * currentStep.progress, height: 4)
+                        .animation(.spring(response: 0.4), value: currentStep)
+                }
+                .padding(.horizontal, 20)
             }
+            .frame(height: 4)
+            .padding(.top, 16)
         }
         .onAppear {
             // Guard against duplicate onAppear calls (SwiftUI can call this multiple times)
@@ -5890,8 +5861,6 @@ struct OnboardingRatingView: View {
     let onContinue: () -> Void
     @State private var currentTestimonial = 0
     @State private var showContent = false
-    @State private var showStars = false
-    @State private var showAvatars = false
     @State private var starScale: [CGFloat] = [0, 0, 0, 0, 0]
     
     private let testimonials = [
@@ -5911,7 +5880,7 @@ struct OnboardingRatingView: View {
                 Text("Give us a rating")
                     .font(.system(size: 32, weight: .bold))
                     .foregroundStyle(.white)
-                    .padding(.top, 20)
+                    .padding(.top, 60)
                     .opacity(showContent ? 1 : 0)
                     .offset(y: showContent ? 0 : 20)
                 
@@ -5958,50 +5927,8 @@ struct OnboardingRatingView: View {
                     .opacity(showContent ? 1 : 0)
                     .offset(y: showContent ? 0 : 20)
                 
-                // User avatars (Commented out until we have real photos)
-                /*
-                HStack(spacing: -16) {
-                    if showAvatars {
-                        ForEach(0..<3, id: \.self) { index in
-                            Circle()
-                                .fill([Color.red, Color.green, Color.blue][index].opacity(0.8))
-                                .frame(width: 52, height: 52)
-                                .overlay(
-                                    Image(systemName: "person.fill")
-                                        .font(.system(size: 22))
-                                        .foregroundStyle(.white)
-                                )
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.black.opacity(0.5), lineWidth: 3)
-                                )
-                                .transition(.scale.combined(with: .opacity))
-                                .zIndex(Double(3 - index))
-                        }
-                    }
-                }
-                .padding(.top, 32)
-                .onAppear {
-                    withAnimation(.spring(duration: 0.6, bounce: 0.4).delay(0.8)) {
-                        showAvatars = true
-                    }
-                }
-                
-                Text("+1000s users")
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(Theme.Colors.primary)
-                    .padding(.vertical, 8)
-                    .padding(.horizontal, 16)
-                    .background(
-                        Capsule()
-                            .fill(Theme.Colors.primary.opacity(0.15))
-                    )
-                    .padding(.top, 12)
-                    .opacity(showContent ? 1 : 0)
-                    .offset(y: showContent ? 0 : 10)
-                */
-                
                 Spacer()
+                    .frame(maxHeight: 80)
                 
                 // Testimonial card
                 TabView(selection: $currentTestimonial) {
@@ -6066,55 +5993,35 @@ struct TestimonialCard: View {
     let review: String
     
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 12) {
-                Circle()
-                    .fill(LinearGradient(colors: [.blue.opacity(0.6), .purple.opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .frame(width: 48, height: 48)
-                    .overlay(
-                        Text(String(name.prefix(1)))
-                            .font(.system(size: 20, weight: .bold))
-                            .foregroundStyle(.white)
-                    )
-                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 1))
-                
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(name)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(.white)
-                    Text(handle)
+        VStack(spacing: 16) {
+            // Stars
+            HStack(spacing: 4) {
+                ForEach(0..<5, id: \.self) { _ in
+                    Image(systemName: "star.fill")
                         .font(.system(size: 14))
-                        .foregroundStyle(.white.opacity(0.5))
-                }
-                
-                Spacer()
-                
-                HStack(spacing: 2) {
-                    ForEach(0..<5, id: \.self) { _ in
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 12))
-                            .foregroundStyle(.yellow)
-                    }
+                        .foregroundStyle(.yellow)
                 }
             }
             
-            Text(review)
-                .font(.system(size: 16, weight: .regular))
-                .lineSpacing(4)
-                .foregroundStyle(.white.opacity(0.9))
+            // Review Text
+            Text("\"\(review)\"")
+                .font(.system(size: 15))
+                .foregroundStyle(.white.opacity(0.8))
+                .multilineTextAlignment(.center)
+                .italic()
+                .lineLimit(nil)
                 .fixedSize(horizontal: false, vertical: true)
+            
+            // Name
+            Text("— \(name)")
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white.opacity(0.5))
         }
-        .padding(20)
+        .padding(24)
         .background(
             RoundedRectangle(cornerRadius: 20)
-                .fill(.ultraThinMaterial)
-                .environment(\.colorScheme, .dark)
+                .fill(Color.white.opacity(0.05))
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20)
-                .stroke(Color.white.opacity(0.1), lineWidth: 1)
-        )
-        .shadow(color: Color.black.opacity(0.2), radius: 10, x: 0, y: 5)
     }
 }
 
@@ -6131,7 +6038,7 @@ struct OnboardingJoinView: View {
     @State private var phoneShake = false
     @State private var dumbbellBounce = false
     
-    private let authManager = AuthenticationManager.shared
+    @State private var authManager = AuthenticationManager.shared
     
     var body: some View {
         ZStack {
@@ -6243,8 +6150,8 @@ struct OnboardingJoinView: View {
                         authManager.handleAppleSignInRequest(request)
                     } onCompletion: { result in
                         Task {
-                            await authManager.handleAppleSignInCompletion(result)
-                            if authManager.isAuthenticated {
+                            let success = await authManager.handleAppleSignInCompletion(result)
+                            if success {
                                 onLogin()
                             }
                         }
@@ -6256,8 +6163,8 @@ struct OnboardingJoinView: View {
                     // Google Sign In
                     Button {
                         Task {
-                            try? await authManager.signInWithGoogle()
-                            if authManager.isAuthenticated {
+                            let success = await authManager.signInWithGoogle()
+                            if success {
                                 onLogin()
                             }
                         }
@@ -6276,25 +6183,34 @@ struct OnboardingJoinView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                     
-                    // Skip (Blue Gradient)
-                    Button(action: onSkip) {
-                        HStack(spacing: 8) {
-                            Text("Skip")
-                                .font(.system(size: 16, weight: .bold))
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: 14, weight: .bold))
+                    // Skip (Muted style - de-emphasized)
+                    Button {
+                        Task {
+                            // If user isn't authenticated (edge case), sign in anonymously
+                            if !authManager.isAuthenticated {
+                                do {
+                                    try await authManager.signInAnonymously()
+                                    print("[Onboarding] Signed in anonymously on skip")
+                                } catch {
+                                    print("[Onboarding] Anonymous sign in failed: \(error)")
+                                }
+                            }
+                            onSkip()
                         }
-                        .foregroundStyle(.white)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("Skip for now")
+                                .font(.system(size: 16, weight: .semibold))
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .foregroundStyle(.white.opacity(0.7))
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 16)
                         .background(
-                            LinearGradient(
-                                colors: [Color(hex: "007AFF"), Color(hex: "00C7BE")],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
+                            RoundedRectangle(cornerRadius: 14)
+                                .fill(Color.white.opacity(0.1))
                         )
-                        .clipShape(RoundedRectangle(cornerRadius: 14))
                     }
                 }
                 .padding(.horizontal, 24)
@@ -6747,6 +6663,10 @@ struct OnboardingJourneyChartView: View {
             }
         }
         .onAppear {
+            // Pre-warm Superwall now so paywall loads fast when user reaches it
+            print("[Superwall] 🔥 Pre-warming Superwall (journey chart visible)...")
+            SuperwallManager.shared.preWarm()
+            
             withAnimation(.easeInOut(duration: 2.0).delay(0.5)) {
                 drawChart = true
             }
@@ -6850,12 +6770,14 @@ struct OnboardingBenefitsSummaryView: View {
                 .padding(.bottom, 16)
                 
                 // Button triggers Superwall paywall, then continues
-                // TODO: Re-enable paywall after testing
                 OnboardingContinueButton("Join ScreenBlock", action: {
-                    // SuperwallManager.shared.register(placement: "campaign_trigger") {
-                    //     onContinue()
-                    // }
-                    onContinue() // Skip paywall for testing
+                    let paywallStart = Date()
+                    print("[Paywall] 🚀 Triggering Superwall paywall...")
+                    SuperwallManager.shared.register(placement: "campaign_trigger") {
+                        let elapsed = Date().timeIntervalSince(paywallStart)
+                        print(String(format: "[Paywall] ✅ Paywall completed in %.2fs", elapsed))
+                        onContinue()
+                    }
                 })
             }
         }
@@ -7005,11 +6927,13 @@ struct OnboardingPaywallView: View {
     var body: some View {
         Color.clear
             .onAppear {
-                // TODO: Re-enable paywall after testing
-                // SuperwallManager.shared.register(placement: "campaign_trigger") {
-                //     onContinue()
-                // }
-                onContinue() // Skip paywall for testing
+                let paywallStart = Date()
+                print("[Paywall] 🚀 OnboardingPaywallView - triggering Superwall...")
+                SuperwallManager.shared.register(placement: "campaign_trigger") {
+                    let elapsed = Date().timeIntervalSince(paywallStart)
+                    print(String(format: "[Paywall] ✅ OnboardingPaywallView completed in %.2fs", elapsed))
+                    onContinue()
+                }
             }
     }
 }
@@ -7020,70 +6944,220 @@ struct OnboardingSuccessView: View {
     let userName: String
     let isPreview: Bool
     let onComplete: () -> Void
+    
+    // Animation states
+    @State private var showCircle = false
     @State private var showCheckmark = false
+    @State private var showGlow = false
+    @State private var showRings = false
+    @State private var showText = false
+    @State private var showButton = false
+    @State private var pulseGlow = false
+    @State private var checkmarkTrim: CGFloat = 0
+    
+    private var displayName: String {
+        userName.isEmpty ? "Champion" : userName
+    }
     
     var body: some View {
         ZStack {
-            OnboardingBackground()
+            // Animated starfield background
+            StarfieldView()
+                .opacity(0.6)
+            
+            // Subtle radial gradient from center
+            RadialGradient(
+                colors: [
+                    Theme.Colors.primary.opacity(showGlow ? 0.3 : 0),
+                    Theme.Colors.primary.opacity(showGlow ? 0.1 : 0),
+                    .clear
+                ],
+                center: .center,
+                startRadius: 50,
+                endRadius: 300
+            )
+            .animation(.easeOut(duration: 1.0), value: showGlow)
             
             VStack(spacing: 0) {
-            Spacer()
-            
-            // Animated checkmark
-            ZStack {
-                Circle()
-                    .fill(Theme.Colors.primary.opacity(0.15))
-                    .frame(width: 140, height: 140)
+                Spacer()
                 
-                Circle()
-                    .fill(Theme.Colors.primary)
-                    .frame(width: 100, height: 100)
-                    .scaleEffect(showCheckmark ? 1 : 0)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.6), value: showCheckmark)
-                
-                Image(systemName: "checkmark")
-                    .font(.system(size: 48, weight: .bold))
-                    .foregroundStyle(.white)
-                    .scaleEffect(showCheckmark ? 1 : 0)
-                    .animation(.spring(response: 0.5, dampingFraction: 0.6).delay(0.2), value: showCheckmark)
-            }
-            
-            Text("You're all set\(userName.isEmpty ? "" : ", \(userName)")!")
-                .font(.system(size: 28, weight: .bold))
-                .foregroundStyle(.white)
-                .padding(.top, 32)
-            
-            Text("Your journey to a healthier\nrelationship with screens starts now.")
-                .font(.system(size: 16))
-                .foregroundStyle(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
-                .padding(.top, 12)
-            
-            Spacer()
-            
-            Button {
-                if !isPreview {
-                    UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+                // Epic animated checkmark with rings
+                ZStack {
+                    // Outer expanding rings
+                    ForEach(0..<3, id: \.self) { index in
+                        Circle()
+                            .stroke(Theme.Colors.primary.opacity(0.3), lineWidth: 2)
+                            .frame(width: 120 + CGFloat(index * 40), height: 120 + CGFloat(index * 40))
+                            .scaleEffect(showRings ? 1.2 : 0.8)
+                            .opacity(showRings ? 0 : 0.8)
+                            .animation(
+                                .easeOut(duration: 1.5)
+                                .repeatForever(autoreverses: false)
+                                .delay(Double(index) * 0.3),
+                                value: showRings
+                            )
+                    }
+                    
+                    // Pulsing glow ring
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [Theme.Colors.primary.opacity(0.4), .clear],
+                                center: .center,
+                                startRadius: 40,
+                                endRadius: 90
+                            )
+                        )
+                        .frame(width: 180, height: 180)
+                        .scaleEffect(pulseGlow ? 1.1 : 0.95)
+                        .animation(
+                            .easeInOut(duration: 1.5).repeatForever(autoreverses: true),
+                            value: pulseGlow
+                        )
+                    
+                    // Dark ring behind main circle
+                    Circle()
+                        .fill(Theme.Colors.primary.opacity(0.2))
+                        .frame(width: 140, height: 140)
+                        .scaleEffect(showCircle ? 1 : 0)
+                        .animation(.spring(response: 0.6, dampingFraction: 0.7), value: showCircle)
+                    
+                    // Main circle with gradient
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [Theme.Colors.primary, Theme.Colors.primary.opacity(0.8)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .frame(width: 110, height: 110)
+                        .shadow(color: Theme.Colors.primary.opacity(0.5), radius: 20, x: 0, y: 0)
+                        .scaleEffect(showCircle ? 1 : 0)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.6).delay(0.1), value: showCircle)
+                    
+                    // Animated checkmark stroke
+                    CheckmarkShape()
+                        .trim(from: 0, to: checkmarkTrim)
+                        .stroke(style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                        .foregroundStyle(.white)
+                        .frame(width: 45, height: 35)
+                        .offset(y: -2)
                 }
-                onComplete()
-            } label: {
-                Text("Let's Go!")
-                    .font(.system(size: 18, weight: .bold))
+                .padding(.bottom, 40)
+                
+                // Main headline with staggered animation
+                VStack(spacing: 8) {
+                    Text("You did it, \(displayName)!")
+                        .font(.system(size: 32, weight: .bold))
+                        .foregroundStyle(.white)
+                        .opacity(showText ? 1 : 0)
+                        .offset(y: showText ? 0 : 20)
+                        .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.6), value: showText)
+                    
+                    Text("🎉")
+                        .font(.system(size: 28))
+                        .scaleEffect(showText ? 1 : 0)
+                        .animation(.spring(response: 0.5, dampingFraction: 0.5).delay(0.8), value: showText)
+                }
+                
+                // Subtext with better copy
+                VStack(spacing: 16) {
+                    Text("Every push-up earns you more screen time.\nEvery scroll now has a purpose.")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(4)
+                        .opacity(showText ? 1 : 0)
+                        .offset(y: showText ? 0 : 15)
+                        .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(0.9), value: showText)
+                    
+                    Text("You're about to become the best version of yourself.")
+                        .font(.system(size: 15))
+                        .foregroundStyle(.white.opacity(0.5))
+                        .multilineTextAlignment(.center)
+                        .opacity(showText ? 1 : 0)
+                        .offset(y: showText ? 0 : 15)
+                        .animation(.spring(response: 0.6, dampingFraction: 0.8).delay(1.1), value: showText)
+                }
+                .padding(.top, 20)
+                .padding(.horizontal, 32)
+                
+                Spacer()
+                
+                // CTA Button with entrance animation
+                Button {
+                    if !isPreview {
+                        UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
+                    }
+                    onComplete()
+                } label: {
+                    HStack(spacing: 10) {
+                        Text("Start My Journey")
+                            .font(.system(size: 18, weight: .bold))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 16, weight: .bold))
+                    }
                     .foregroundStyle(.black)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 18)
-                    .background(.white)
+                    .background(
+                        LinearGradient(
+                            colors: [.white, .white.opacity(0.95)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
                     .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .shadow(color: .white.opacity(0.3), radius: 20, x: 0, y: 0)
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 40)
+                .opacity(showButton ? 1 : 0)
+                .offset(y: showButton ? 0 : 30)
+                .animation(.spring(response: 0.7, dampingFraction: 0.8).delay(1.3), value: showButton)
             }
-            .padding(.horizontal, 24)
-            .padding(.bottom, 40)
         }
         .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                showCheckmark = true
+            // Orchestrated animation sequence
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                showCircle = true
+                showGlow = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                withAnimation(.easeOut(duration: 0.4)) {
+                    checkmarkTrim = 1.0
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                showRings = true
+                pulseGlow = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                showText = true
+                showButton = true
             }
         }
-        }
+    }
+}
+
+// Custom checkmark shape for stroke animation
+struct CheckmarkShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        
+        // Start from bottom-left of check
+        let startPoint = CGPoint(x: rect.minX, y: rect.midY)
+        // Middle point (bottom of the V)
+        let midPoint = CGPoint(x: rect.width * 0.35, y: rect.maxY)
+        // End point (top-right)
+        let endPoint = CGPoint(x: rect.maxX, y: rect.minY)
+        
+        path.move(to: startPoint)
+        path.addLine(to: midPoint)
+        path.addLine(to: endPoint)
+        
+        return path
     }
 }
 
