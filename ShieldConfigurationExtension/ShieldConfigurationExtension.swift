@@ -80,9 +80,9 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
                 color: primaryColor
             ),
             
-            // Subtitle - Clear message
+            // Subtitle - All messaging in one natural flow (like Opal's style)
             subtitle: ShieldConfiguration.Label(
-                text: "You've hit your limit for \(appName).\n\nDiscipline is a muscle. Train it.",
+                text: "You've hit your limit for \(appName).\n\nDiscipline is a muscle. Train it.\n\nOpen ScreenBlock to earn more time.",
                 color: .white
             ),
             
@@ -91,14 +91,7 @@ class ShieldConfigurationExtension: ShieldConfigurationDataSource {
                 text: "Close \(appName)",
                 color: .black
             ),
-            primaryButtonBackgroundColor: primaryColor,
-            
-            // Secondary "button" styled as text - appears below primary button
-            // Note: This is technically a button but styled to look like plain text
-            secondaryButtonLabel: ShieldConfiguration.Label(
-                text: "Open ScreenBlock to earn more time",
-                color: .white.withAlphaComponent(0.7)
-            )
+            primaryButtonBackgroundColor: primaryColor
         )
     }
 }

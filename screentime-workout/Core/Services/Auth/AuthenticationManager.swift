@@ -28,8 +28,29 @@ final class AuthenticationManager: NSObject {
     // For account linking
     private var anonymousUserId: String?
     
+    // Track if we've set up the auth listener
+    private var hasAuthListener = false
+    
     private override init() {
         super.init()
+        
+        // Only set up auth listener if Firebase is configured
+        // During onboarding, Firebase is not configured - we'll set it up later
+        setupAuthListenerIfNeeded()
+    }
+    
+    /// Set up Firebase Auth listener (safe to call multiple times)
+    func setupAuthListenerIfNeeded() {
+        guard !hasAuthListener else { return }
+        
+        // Check if Firebase is configured
+        guard FirebaseApp.app() != nil else {
+            print("[Auth] Firebase not configured yet - will set up listener later")
+            return
+        }
+        
+        hasAuthListener = true
+        print("[Auth] Setting up auth state listener")
         
         // Listen for auth state changes
         Auth.auth().addStateDidChangeListener { [weak self] _, user in

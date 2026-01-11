@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import FirebaseCore
 import FirebaseFirestore
 import FirebaseAuth
 
@@ -15,7 +16,16 @@ final class OnboardingDataManager {
     static let shared = OnboardingDataManager()
     
     private let defaults = UserDefaults.standard
-    private let db = Firestore.firestore()
+    
+    // Lazy database access - only initialize Firestore when actually needed
+    // (after Firebase is configured, which happens when onboarding completes)
+    private var _db: Firestore?
+    private var db: Firestore {
+        if _db == nil {
+            _db = Firestore.firestore()
+        }
+        return _db!
+    }
     
     // MARK: - UserDefaults Keys
     private enum Keys {
@@ -144,7 +154,15 @@ final class OnboardingDataManager {
     
     /// Call this after a batch of saves to schedule a debounced Firebase sync
     /// Much more efficient than syncing after every individual save
+    /// NOTE: This now does NOTHING during onboarding - sync only happens at completion
     func scheduleDebouncedSync() {
+        // SKIP syncing during onboarding - Firebase Analytics XPC reporter
+        // causes massive main thread stalls when syncing with unstable network.
+        // All data will be synced when markOnboardingComplete() is called.
+        guard hasCompletedOnboarding() else {
+            print("[OnboardingData] Skipping sync during onboarding (will sync at completion)")
+            return
+        }
         syncToFirebaseIfNeeded(force: false)
     }
     
@@ -261,6 +279,8 @@ final class OnboardingDataManager {
     // MARK: - Firebase Sync
     
     private func syncToFirebaseIfNeeded(force: Bool = false) {
+        // Safe access - skip if Firebase not configured
+        guard FirebaseApp.app() != nil else { return }
         guard let userId = Auth.auth().currentUser?.uid else {
             // No user = no sync needed, this is fine
             return

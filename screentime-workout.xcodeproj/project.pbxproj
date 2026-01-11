@@ -12,7 +12,6 @@
 		4F053B9F2F08A07000320FAC /* SuperwallKit in Frameworks */ = {isa = PBXBuildFile; productRef = 4F053B9E2F08A07000320FAC /* SuperwallKit */; };
 		4F220BFD2F0473D8007138EF /* FirebaseAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 4F220BFC2F0473D8007138EF /* FirebaseAnalytics */; };
 		4F220BFF2F0473D8007138EF /* FirebaseAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 4F220BFE2F0473D8007138EF /* FirebaseAuth */; };
-		4F220C012F0473D8007138EF /* FirebaseCrashlytics in Frameworks */ = {isa = PBXBuildFile; productRef = 4F220C002F0473D8007138EF /* FirebaseCrashlytics */; };
 		4F220C032F0473D8007138EF /* FirebaseDatabase in Frameworks */ = {isa = PBXBuildFile; productRef = 4F220C022F0473D8007138EF /* FirebaseDatabase */; };
 		4F220C052F0473D8007138EF /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 4F220C042F0473D8007138EF /* FirebaseFirestore */; };
 		4F220C072F0473D8007138EF /* FirebaseInAppMessaging-Beta in Frameworks */ = {isa = PBXBuildFile; productRef = 4F220C062F0473D8007138EF /* FirebaseInAppMessaging-Beta */; };
@@ -159,7 +158,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				4F220C012F0473D8007138EF /* FirebaseCrashlytics in Frameworks */,
 				4F220C122F048ADE007138EF /* GoogleSignIn in Frameworks */,
 				4F053B9F2F08A07000320FAC /* SuperwallKit in Frameworks */,
 				4F220BFD2F0473D8007138EF /* FirebaseAnalytics in Frameworks */,
@@ -268,7 +266,6 @@
 				4F220A012F034143007138EF /* Sources */,
 				4F220A022F034143007138EF /* Frameworks */,
 				4F220A032F034143007138EF /* Resources */,
-				4FEB02772F0CA18A0086A923 /* ShellScript */,
 				4FEB028E2F0DEF050086A923 /* CopyFiles */,
 			);
 			buildRules = (
@@ -284,7 +281,6 @@
 			packageProductDependencies = (
 				4F220BFC2F0473D8007138EF /* FirebaseAnalytics */,
 				4F220BFE2F0473D8007138EF /* FirebaseAuth */,
-				4F220C002F0473D8007138EF /* FirebaseCrashlytics */,
 				4F220C022F0473D8007138EF /* FirebaseDatabase */,
 				4F220C042F0473D8007138EF /* FirebaseFirestore */,
 				4F220C062F0473D8007138EF /* FirebaseInAppMessaging-Beta */,
@@ -460,31 +456,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
-
-/* Begin PBXShellScriptBuildPhase section */
-		4FEB02772F0CA18A0086A923 /* ShellScript */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}",
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Resources/DWARF/${PRODUCT_NAME}",
-				"${DWARF_DSYM_FOLDER_PATH}/${DWARF_DSYM_FILE_NAME}/Contents/Info.plist",
-				"$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/GoogleService-Info.plist",
-				"$(TARGET_BUILD_DIR)/$(EXECUTABLE_PATH)",
-			);
-			outputFileListPaths = (
-			);
-			outputPaths = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "# Type a script or drag a script file from your workspace to insert its path.\n\"${BUILD_DIR%/Build/*}/SourcePackages/checkouts/firebase-ios-sdk/Crashlytics/run\"\n";
-		};
-/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		4F053B862F087BAD00320FAC /* Sources */ = {
@@ -1040,11 +1011,6 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 4F220BFB2F046CA4007138EF /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
 			productName = FirebaseAuth;
-		};
-		4F220C002F0473D8007138EF /* FirebaseCrashlytics */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 4F220BFB2F046CA4007138EF /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */;
-			productName = FirebaseCrashlytics;
 		};
 		4F220C022F0473D8007138EF /* FirebaseDatabase */ = {
 			isa = XCSwiftPackageProductDependency;

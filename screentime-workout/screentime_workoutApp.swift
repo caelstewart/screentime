@@ -10,7 +10,7 @@ import SwiftData
 import FirebaseCore
 import FirebaseFirestore
 import FirebaseInAppMessaging
-import FirebaseCrashlytics
+import FirebaseAnalytics
 import GoogleSignIn
 import SuperwallKit
 
@@ -111,28 +111,60 @@ final class SuperwallManager {
 // MARK: - App Delegate for Firebase
 
 class AppDelegate: NSObject, UIApplicationDelegate {
+    /// Whether Firebase has been configured this session
+    static var isFirebaseConfigured = false
+    
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         print("[App] 🚀 didFinishLaunchingWithOptions START - \(Date())")
         
-        // Configure Firebase
+        // ALWAYS configure Firebase - Auth requires it to be configured before use.
+        // The XPC reporter stalls are caused by GoogleAppMeasurement (Analytics),
+        // which is already disabled via Info.plist flags.
+        Self.configureFirebase()
+        
+        // Check if this is first run (onboarding not complete)
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        if !hasCompletedOnboarding {
+            // During onboarding, disable Firestore network to minimize any remaining XPC activity
+            Firestore.firestore().disableNetwork { _ in
+                print("[Firebase] Network disabled during onboarding")
+            }
+        }
+        
+        // Defer analytics until after onboarding to keep first-run silky smooth
+        print("[Analytics] PostHog setup deferred until onboarding completes")
+        
+        // NOTE: Superwall is now lazily initialized on first paywall trigger
+        // to avoid WKWebView blocking app startup with network issues
+        print("[Superwall] Deferred initialization (will configure on first use)")
+        
+        // Pre-warm keyboard to avoid 2-3s delay on first text input
+        // iOS loads keyboard extensions lazily - this forces early load
+        KeyboardPrewarmer.shared.prewarm()
+        
+        print("[App] ✅ didFinishLaunchingWithOptions COMPLETE - \(Date())")
+        return true
+    }
+    
+    /// Configure Firebase (called once at launch)
+    static func configureFirebase() {
+        guard !isFirebaseConfigured else {
+            print("[Firebase] Already configured, skipping")
+            return
+        }
+        isFirebaseConfigured = true
+        
         let firebaseStart = Date()
         FirebaseApp.configure()
         print(String(format: "[App] Firebase.configure() took %.3fs", Date().timeIntervalSince(firebaseStart)))
         
-        // CRITICAL: Disable Crashlytics in DEBUG builds
-        // Crashlytics does heavy main-thread work (symbol uploads, XPC connections)
-        // that causes 3-10 second UI freezes. Only enable in Release builds.
-        #if DEBUG
-        Crashlytics.crashlytics().setCrashlyticsCollectionEnabled(false)
-        print("[Crashlytics] Disabled for DEBUG build")
-        #else
-        print("[Crashlytics] Enabled for RELEASE build")
-        #endif
+        // CRITICAL: Completely disable Firebase Analytics to stop XPC reporter stalls
+        // The Info.plist flags prevent collection but the SDK still initializes
+        // This programmatic disable stops any remaining reporter activity
+        Analytics.setAnalyticsCollectionEnabled(false)
         
-        // IMPORTANT: Completely disable Firebase In-App Messaging
-        // It's not enabled in Firebase Console and causes repeated 403 errors
-        // Both suppress display AND disable data collection to stop network requests
+        // Disable Firebase In-App Messaging
         let inAppMessaging = InAppMessaging.inAppMessaging()
         inAppMessaging.messageDisplaySuppressed = true
         inAppMessaging.automaticDataCollectionEnabled = false
@@ -143,27 +175,7 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         settings.cacheSettings = PersistentCacheSettings(sizeBytes: 100 * 1024 * 1024 as NSNumber) // 100MB cache
         firestore.settings = settings
         
-        // Temporarily disable network to prevent blocking on connection issues
-        // Re-enable after UI is ready (1 second delay)
-        firestore.disableNetwork { _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                firestore.enableNetwork { _ in
-                    print("[Firebase] Network re-enabled")
-                }
-            }
-        }
-        
-        print("[Firebase] Configured successfully with offline persistence")
-        
-        // Defer analytics until after onboarding to keep first-run silky smooth
-        print("[Analytics] PostHog setup deferred until onboarding completes")
-        
-        // NOTE: Superwall is now lazily initialized on first paywall trigger
-        // to avoid WKWebView blocking app startup with network issues
-        print("[Superwall] Deferred initialization (will configure on first use)")
-        
-        print("[App] ✅ didFinishLaunchingWithOptions COMPLETE - \(Date())")
-        return true
+        print("[Firebase] ✅ Configured successfully")
     }
     
     // Handle URL callback for Google Sign-In
@@ -171,6 +183,50 @@ class AppDelegate: NSObject, UIApplicationDelegate {
                      open url: URL,
                      options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
         return GIDSignIn.sharedInstance.handle(url)
+    }
+}
+
+// MARK: - Keyboard Pre-Warmer
+
+/// Pre-warms the iOS keyboard to avoid the 2-3 second delay on first appearance
+/// iOS loads keyboard extensions lazily - this forces early initialization
+final class KeyboardPrewarmer {
+    static let shared = KeyboardPrewarmer()
+    private var hasPrewarmed = false
+    
+    private init() {}
+    
+    /// Call this early in app launch to pre-initialize the keyboard
+    func prewarm() {
+        guard !hasPrewarmed else { return }
+        hasPrewarmed = true
+        
+        // Run on main thread after a tiny delay to not block launch
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            self.triggerKeyboardLoad()
+        }
+    }
+    
+    private func triggerKeyboardLoad() {
+        // Create a hidden text field and briefly make it first responder
+        // This forces iOS to load the keyboard extension
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let window = windowScene.windows.first else { return }
+        
+        let hiddenField = UITextField(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
+        hiddenField.autocorrectionType = .no
+        hiddenField.spellCheckingType = .no
+        window.addSubview(hiddenField)
+        
+        // Become first responder to trigger keyboard load
+        hiddenField.becomeFirstResponder()
+        
+        // Immediately resign and remove - keyboard is now cached
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            hiddenField.resignFirstResponder()
+            hiddenField.removeFromSuperview()
+            print("[Keyboard] Pre-warmed successfully")
+        }
     }
 }
 

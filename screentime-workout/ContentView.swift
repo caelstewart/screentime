@@ -15,6 +15,7 @@ import DeviceActivity
 import AuthenticationServices
 import SuperwallKit
 import StoreKit
+import FirebaseFirestore
 
 struct ContentView: View {
     @Environment(\.modelContext) private var modelContext
@@ -25,28 +26,17 @@ struct ContentView: View {
     @State private var showingAppSelection = false
     @State private var selectedAppCount = 0
     @State private var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-    @State private var isRestoringFromFirebase = false
-    @State private var restoreStart: Date?
     @State private var hasAttemptedRestore = false
+    // NOTE: Removed isRestoringFromFirebase and restoreStart - they caused view rebuilds
     
     private let onboardingDataManager = OnboardingDataManager.shared
     
     var body: some View {
         Group {
-            if isRestoringFromFirebase {
-                // Show loading while restoring from Firebase
-                ZStack {
-                    Color.black.ignoresSafeArea()
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: Theme.Colors.primary))
-                            .scaleEffect(1.5)
-                        Text("Restoring your progress...")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                }
-            } else if authManager.isAuthenticated {
+            // NOTE: Removed isRestoringFromFirebase conditional - it was causing
+            // view hierarchy rebuilds and double OnboardingFlowView creation.
+            // Restore now happens in background without blocking the UI.
+            if authManager.isAuthenticated {
                 // User is authenticated (either real account or anonymous)
                 if hasCompletedOnboarding {
                     MainTabView(
@@ -55,18 +45,27 @@ struct ContentView: View {
                     )
                     .id("main-\(authManager.user?.uid ?? "none")") // Force recreate on user change
                 } else {
-                    let _ = print("[ContentView] 🎯 Showing OnboardingFlowView - \(Date())")
-                    OnboardingFlowView(isPreview: false) {
+                    OnboardingFlowView(previewMode: false) {
+                        print("[Onboarding] ✅ COMPLETE")
+                        
+                        // Enable Firestore network (was disabled during onboarding)
+                        Firestore.firestore().enableNetwork { _ in
+                            print("[Firebase] Network enabled (onboarding complete)")
+                        }
+                        
                         // Mark onboarding complete and sync to Firebase
                         onboardingDataManager.markOnboardingComplete()
                         hasCompletedOnboarding = true
                         AnalyticsManager.shared.startIfNeeded()
+                        UserDataManager.shared.resumeListeners()
                         
                         // Sync all local data to Firebase
                         Task {
+                            try? await Task.sleep(nanoseconds: 500_000_000) // 0.5s
                             await userDataManager.syncLocalDataToFirebase(context: modelContext)
                         }
                     }
+                    .id("onboarding-flow") // Stable ID prevents recreation on body re-evaluation
                 }
             } else {
                 // Not authenticated - show login view
@@ -76,6 +75,14 @@ struct ContentView: View {
         .onAppear {
             let elapsed = Date().timeIntervalSince(AppLaunchMetrics.start)
             print(String(format: "[UI] ContentView appeared at %.2fs after launch", elapsed))
+            
+            // CRITICAL: Block Firestore listeners if onboarding is not complete
+            // This prevents the auth state listener from starting listeners
+            // that would block the main thread during network issues
+            if !hasCompletedOnboarding {
+                userDataManager.pauseListeners()
+            }
+            
             if hasCompletedOnboarding {
                 AnalyticsManager.shared.startIfNeeded()
             }
@@ -85,32 +92,12 @@ struct ContentView: View {
                 AnalyticsManager.shared.startIfNeeded()
             }
         }
-        // Show UI immediately; overlay a lightweight restore indicator without blocking
-        .overlay {
-            if isRestoringFromFirebase {
-                ZStack {
-                    Color.black.opacity(0.4).ignoresSafeArea()
-                    VStack(spacing: 16) {
-                        ProgressView()
-                            .progressViewStyle(CircularProgressViewStyle(tint: Theme.Colors.primary))
-                            .scaleEffect(1.5)
-                        Text("Restoring your progress...")
-                            .font(.system(size: 16))
-                            .foregroundStyle(.white.opacity(0.8))
-                    }
-                }
-                .allowsHitTesting(false) // Do not block interactions
-                .transition(.opacity)
-            }
-        }
-        .onReceive(
-            NotificationCenter.default
-                .publisher(for: UserDefaults.didChangeNotification)
-                .receive(on: RunLoop.main)
-        ) { _ in
-            // Update state when UserDefaults changes
-            hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        }
+        // NOTE: Removed restore overlay - it was triggering state changes that
+        // caused view hierarchy rebuilds. Restore now happens silently in background.
+        // REMOVED: UserDefaults.didChangeNotification listener
+        // This was firing on EVERY UserDefaults write during onboarding,
+        // causing constant body re-evaluations and view recreation.
+        // hasCompletedOnboarding is now only updated explicitly.
         .onChange(of: authManager.isAuthenticated) { _, isAuthenticated in
             if isAuthenticated, let userId = authManager.user?.uid, !hasAttemptedRestore {
                 hasAttemptedRestore = true
@@ -119,22 +106,17 @@ struct ContentView: View {
                 // and onboarding isn't complete locally (new device scenario)
                 if !authManager.isAnonymous && !hasCompletedOnboarding {
                     Task {
-                        restoreStart = Date()
-                        isRestoringFromFirebase = true
+                        let start = Date()
+                        // NOTE: Removed isRestoringFromFirebase state changes - they were causing
+                        // view hierarchy rebuilds. Restore silently in background.
                         let restored = await userDataManager.restoreFromFirebase(context: modelContext)
                         if restored {
                             hasCompletedOnboarding = onboardingDataManager.hasCompletedOnboarding()
                         }
-                        isRestoringFromFirebase = false
-                        if let start = restoreStart {
-                            let elapsed = Date().timeIntervalSince(start)
-                            print(String(format: "[UI] Restore overlay dismissed in %.2fs", elapsed))
-                        }
+                        let elapsed = Date().timeIntervalSince(start)
+                        print(String(format: "[UI] Background restore completed in %.2fs", elapsed))
                     }
                 }
-                // NOTE: Removed unnecessary sync for returning users.
-                // Firebase listeners automatically sync FROM Firebase.
-                // We only sync TO Firebase after onboarding or account upgrade.
             }
         }
         .onChange(of: authManager.isAnonymous) { wasAnonymous, isAnonymous in
@@ -1374,7 +1356,7 @@ struct SettingsView: View {
             }
         }
         .fullScreenCover(isPresented: $showOnboardingPreview) {
-            OnboardingFlowView(isPreview: true) {
+            OnboardingFlowView(previewMode: true) {
                 showOnboardingPreview = false
             }
         }
@@ -2320,6 +2302,7 @@ struct OnboardingFlowView: View {
     @State private var showingAppPicker: Bool = false
     @State private var onboardingRepsCompleted: Int = 0
     @State private var hasLoadedSavedState: Bool = false
+    @State private var hasAppeared: Bool = false  // Prevent duplicate onAppear
     
     @State private var highestStepReached: OnboardingStep = .hook
     @GestureState private var dragOffset: CGFloat = 0
@@ -2393,6 +2376,10 @@ struct OnboardingFlowView: View {
             }
         }
         .onAppear {
+            // Guard against duplicate onAppear calls (SwiftUI can call this multiple times)
+            guard !hasAppeared else { return }
+            hasAppeared = true
+            
             let appearStart = Date()
             if !hasLoadedSavedState {
                 loadSavedState()
@@ -2402,22 +2389,22 @@ struct OnboardingFlowView: View {
                 print(String(format: "[Onboarding] loadSavedState took %.3fs", loadElapsed))
             }
             
-            // NOTE: Superwall pre-warming removed from onboarding start
-            // WKWebView processes take 10+ seconds to launch and block main thread
-            // Pre-warm will happen when user reaches paywall step or visits settings
-            print("[Onboarding] OnboardingFlowView appeared (Superwall preWarm skipped for performance)")
+            print("[Onboarding] OnboardingFlowView appeared")
             
-            // Pause Firebase listeners during onboarding - they fire on main thread
-            // and can cause multi-second stalls during network reconnection events
-            UserDataManager.shared.pauseListeners()
+            // Pause Firestore listeners only during the real onboarding flow.
+            if !isPreview {
+                UserDataManager.shared.pauseListeners()
+            }
             
             MainThreadStallMonitor.shared.start(label: "Onboarding")
         }
         .onDisappear {
             MainThreadStallMonitor.shared.stop()
             
-            // Resume Firebase listeners when leaving onboarding
-            UserDataManager.shared.resumeListeners()
+            // Only resume automatically for preview flows. Real onboarding resumes explicitly on completion.
+            if isPreview {
+                UserDataManager.shared.resumeListeners()
+            }
         }
         .onChange(of: userName) { _, _ in if hasLoadedSavedState { saveOnboardingState() } }
         .onChange(of: selectedGoals) { _, _ in if hasLoadedSavedState { saveOnboardingState() } }
@@ -2687,6 +2674,57 @@ struct OnboardingFlowView: View {
         dataManager.scheduleDebouncedSync()
         
         print("[Onboarding] Saved state - step: \(currentStep)")
+    }
+}
+
+extension OnboardingFlowView {
+    init(previewMode isPreview: Bool, onComplete: @escaping () -> Void) {
+        self.isPreview = isPreview
+        self.onComplete = onComplete
+        let manager = OnboardingDataManager.shared
+        if !isPreview {
+            let savedStepValue = manager.loadCurrentStep()
+            let savedStep = OnboardingStep(rawValue: savedStepValue) ?? .hook
+            self._currentStep = State(initialValue: savedStep)
+            self._highestStepReached = State(initialValue: savedStep)
+            self._userName = State(initialValue: manager.loadUserName())
+            self._selectedGoals = State(initialValue: manager.loadSelectedGoals())
+            self._currentUsageHours = State(initialValue: manager.loadCurrentUsageHours())
+            self._targetUsageHours = State(initialValue: manager.loadTargetUsageHours())
+            self._selectedApps = State(initialValue: manager.loadSelectedApps())
+            self._selectedReasons = State(initialValue: manager.loadSelectedReasons())
+            self._selectedFeelings = State(initialValue: manager.loadSelectedFeelings())
+            self._selectedAge = State(initialValue: manager.loadSelectedAge())
+            self._selectedPreviousSolutions = State(initialValue: manager.loadSelectedPreviousSolutions())
+            self._selectedExercise = State(initialValue: manager.loadSelectedExercise())
+            self._exerciseFrequency = State(initialValue: manager.loadExerciseFrequency())
+            self._notificationsDenied = State(initialValue: manager.loadNotificationsDenied())
+            self._onboardingRepsCompleted = State(initialValue: manager.loadOnboardingRepsCompleted())
+            self._hasLoadedSavedState = State(initialValue: true)
+            let now = Date()
+            self._lastStepChangeTime = State(initialValue: now)
+            self._stepChangeTimestamp = State(initialValue: now)
+        } else {
+            self._currentStep = State(initialValue: .hook)
+            self._highestStepReached = State(initialValue: .hook)
+            self._userName = State(initialValue: "")
+            self._selectedGoals = State(initialValue: [])
+            self._currentUsageHours = State(initialValue: 4)
+            self._targetUsageHours = State(initialValue: 2)
+            self._selectedApps = State(initialValue: [])
+            self._selectedReasons = State(initialValue: [])
+            self._selectedFeelings = State(initialValue: [])
+            self._selectedAge = State(initialValue: "")
+            self._selectedPreviousSolutions = State(initialValue: [])
+            self._selectedExercise = State(initialValue: "")
+            self._exerciseFrequency = State(initialValue: "")
+            self._notificationsDenied = State(initialValue: false)
+            self._onboardingRepsCompleted = State(initialValue: 0)
+            self._hasLoadedSavedState = State(initialValue: false)
+            let now = Date()
+            self._lastStepChangeTime = State(initialValue: now)
+            self._stepChangeTimestamp = State(initialValue: now)
+        }
     }
 }
 
@@ -2999,6 +3037,11 @@ struct OnboardingNameView: View {
             // Simple solid background - avoid expensive gradients during text input
             Theme.Colors.background
                 .ignoresSafeArea()
+                // Only dismiss keyboard when user taps the background (not the text field)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    isTextFieldFocused = false
+                }
             
             VStack(spacing: 0) {
                 Spacer()
@@ -3043,18 +3086,11 @@ struct OnboardingNameView: View {
                     syncAndContinue()
                 })
             }
-            .contentShape(Rectangle())
-            .onTapGesture {
-                isTextFieldFocused = false
-            }
         }
         .onAppear {
             localName = userName
-            // Delay keyboard focus significantly to avoid contributing to stalls
-            // User can tap to focus if they want it sooner
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                isTextFieldFocused = true
-            }
+            // NOTE: Removed auto-focus - it triggers system XPC processes
+            // that cause main thread stalls. User can tap to focus manually.
         }
         .onChange(of: userName) { newValue in
             // Keep local copy aligned if user navigates back

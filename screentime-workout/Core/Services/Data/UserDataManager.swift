@@ -9,6 +9,7 @@
 //
 
 import Foundation
+import FirebaseCore
 import FirebaseFirestore
 import FirebaseAuth
 import SwiftData
@@ -19,7 +20,15 @@ import SwiftData
 final class UserDataManager {
     static let shared = UserDataManager()
     
-    private let db = Firestore.firestore()
+    // Lazy database access - only initialize Firestore when actually needed
+    // (after Firebase is configured)
+    private var _db: Firestore?
+    private var db: Firestore {
+        if _db == nil {
+            _db = Firestore.firestore()
+        }
+        return _db!
+    }
     private let listenerQueue = DispatchQueue(label: "com.screentime-workout.firestore-listeners", qos: .utility)
     private var listenerRegistrations: [ListenerRegistration] = []
     private var lastTimeLimitsLogCount: Int?
@@ -39,7 +48,34 @@ final class UserDataManager {
     private(set) var isSyncing = false
     private(set) var lastSyncDate: Date?
     
+    // Track if we've set up the auth state listener
+    private var hasAuthStateListener = false
+    
     private init() {
+        // Determine initial listener state before any Firebase callbacks fire
+        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
+        listenersBlocked = !hasCompletedOnboarding
+        if listenersBlocked {
+            print("[UserData] 🛑 Listeners blocked until onboarding completes")
+        }
+        
+        // Set up auth listener only if Firebase is configured
+        setupAuthListenerIfNeeded()
+    }
+    
+    /// Set up Firebase Auth state listener (safe to call multiple times)
+    func setupAuthListenerIfNeeded() {
+        guard !hasAuthStateListener else { return }
+        
+        // Check if Firebase is configured
+        guard FirebaseApp.app() != nil else {
+            print("[UserData] Firebase not configured yet - will set up listener later")
+            return
+        }
+        
+        hasAuthStateListener = true
+        print("[UserData] Setting up auth state listener")
+        
         // Listen for auth state changes
         Auth.auth().addStateDidChangeListener { [weak self] _, user in
             if let user = user {
@@ -60,11 +96,15 @@ final class UserDataManager {
     // MARK: - User ID Helper
     
     var currentUserId: String? {
-        Auth.auth().currentUser?.uid
+        // Safe access - returns nil if Firebase not configured
+        guard FirebaseApp.app() != nil else { return nil }
+        return Auth.auth().currentUser?.uid
     }
     
     var isAnonymous: Bool {
-        Auth.auth().currentUser?.isAnonymous ?? false
+        // Safe access - returns false if Firebase not configured
+        guard FirebaseApp.app() != nil else { return false }
+        return Auth.auth().currentUser?.isAnonymous ?? false
     }
     
     // MARK: - Data Models for Firebase
@@ -183,14 +223,19 @@ final class UserDataManager {
     /// Firestore listeners fire on main thread and can cause UI stalls during network issues
     private var pausedUserId: String?
     
+    /// When true, prevents ALL listener startups - used during onboarding
+    /// This must be checked BEFORE startListening is called
+    private(set) var listenersBlocked: Bool
+    
     func pauseListeners() {
-        guard !listenerRegistrations.isEmpty else { return }
+        listenersBlocked = true
         pausedUserId = currentUserId
         print("[UserData] ⏸️ Pausing Firestore listeners for performance")
         stopListening()
     }
     
     func resumeListeners() {
+        listenersBlocked = false
         guard let userId = pausedUserId ?? currentUserId else { return }
         pausedUserId = nil
         print("[UserData] ▶️ Resuming Firestore listeners")
@@ -200,6 +245,12 @@ final class UserDataManager {
     // MARK: - Start/Stop Listening
     
     private func startListening(userId: String) {
+        // Don't start if listeners are blocked (during onboarding)
+        guard !listenersBlocked else {
+            print("[UserData] ⏸️ Listeners blocked - skipping startListening")
+            return
+        }
+        
         stopListening() // Clear any existing listeners
         
         // Listen to workout sessions
